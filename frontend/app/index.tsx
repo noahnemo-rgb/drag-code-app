@@ -486,6 +486,8 @@ export default function EditorScreen() {
     ].join("\n");
     await AsyncStorage.setItem("syntax.pending_prompt", prompt);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    // Dismiss the console sheet so it doesn't linger over the AI screen on web.
+    runSheetRef.current?.dismiss();
     router.push("/ai");
   }, [runOutput, activeFile, content, router]);
 

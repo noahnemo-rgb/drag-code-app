@@ -284,3 +284,12 @@ agent_communication:
     - agent: "testing"
       message: |
         Iteration 10: 14/14 checks PASSED. Drawer, LangMenu, NewFileModal, BtInfoModal, ShortcutsSheet all correctly prop-wired with testIDs intact. All Phase-1 features from iterations 6-9 still work. Only pre-existing RN-Web deprecation warnings carry over. retest_needed=false.
+    - agent: "main"
+      message: |
+        Iteration 11: shipped two novice-focused features.
+          Feature 1: Auto-strip Markdown fences on paste — new pure helper src/lib/paste.ts::stripMarkdownFences() wired into the editor via handleCodeChange (heuristic: >5-char diff + contains ``` triggers strip). Shows a "Fences stripped" paste-toast.
+          Feature 2: One-tap "Why?" / "Explain output" button in the console sheet header — packages current code + terminal output with an ELI5 tutor prompt, writes to syntax.pending_prompt, dismisses the console sheet, and navigates to /ai. Icon+label switch based on whether stderr is present.
+          Feature 2b: New "Apply Fix" button on the first code block of assistant replies (ai.tsx MessageBubble). Writes to syntax.pending_replace; index.tsx now reads both pending_replace and pending_insert on focus — replace wins and REPLACES editor content (with defensive fence re-strip).
+    - agent: "testing"
+      message: |
+        Iteration 11: 20/20 checks PASSED. Both features work end-to-end including real Gemini 3 Pro round-trip. All prior regression checks (palettes, RECENT, sections, Push, ⌘S) still green. Two minor advisories (console sheet lingers on /ai; RN-Web shadow*/pointerEvents deprecations) — main agent applied the sheet-dismiss fix; deprecation warnings deferred as pre-existing.
