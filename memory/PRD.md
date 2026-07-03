@@ -9,7 +9,7 @@ A React Native / Expo mobile IDE app that lets users code within a GUI. Dark uti
 - **Code runner** — Executes Python/JS/TS on the FastAPI backend. TS uses globally-installed `tsx`. HTML preview rendered on-device via WebView. Output shown in a bottom-sheet Console. 10s timeout.
 - **AI Assistant (Gemini 3 Pro / `gemini-3.1-pro-preview`)** — Multi-turn chat with streaming responses, session persistence, and code blocks that are **syntax-highlighted with the same tokenizer as the editor** and carry both Copy and Insert-at-Cursor actions.
 - **Explain Selection** — Selecting text in the editor reveals an amber "Explain with AI" pill above the symbol strip; tapping it navigates to the AI screen with an auto-composed, auto-sent prompt.
-- **Snippets Marketplace** — Public feed of code snippets. Publish (author, title, description, language, tags, code — prefilled from the active file), browse with language chips & search, star (idempotent per-device), tap to view detail with syntax-highlighted code, Insert-at-Cursor into the editor.
+- **Snippets Marketplace** — Public feed of code snippets. Publish (author, title, description, language, tags, code — prefilled from the active file), browse with language chips & search, star (idempotent per-device), tap to view detail with syntax-highlighted code, Insert-at-Cursor into the editor. **MINE tab** filters to snippets you posted with a delete affordance. **Edit** button on your own snippet's detail sheet opens a prefilled form that PATCHes the snippet server-side (author-only).
 - **Local vs Cloud storage** — Toggle in file explorer drawer (AsyncStorage vs MongoDB).
 
 ## Backend endpoints (`/api`)
@@ -20,7 +20,7 @@ A React Native / Expo mobile IDE app that lets users code within a GUI. Dark uti
 - `POST /chat/stream` — streaming plain-text response
 - `GET /chat/history/{session_id}` — persisted messages
 - `DELETE /chat/history/{session_id}` — clear
-- `POST /snippets`, `GET /snippets?language=&q=`, `GET /snippets/{id}`, `POST /snippets/{id}/star` (idempotent toggle by device_id), `GET /snippets/{id}/starred?device_id=…`, `DELETE /snippets/{id}?device_id=…` (author-only)
+- `POST /snippets`, `GET /snippets?language=&q=`, `GET /snippets/{id}`, `PATCH /snippets/{id}` (author-only), `POST /snippets/{id}/star` (idempotent toggle by device_id), `GET /snippets/{id}/starred?device_id=…`, `DELETE /snippets/{id}?device_id=…` (author-only)
 
 ## Screens
 1. **Editor (`/`)** — header (menu, filename+language, AI, Run), gutter+overlay-highlighted TextInput, symbol strip, drawer file explorer, run console bottom sheet.
