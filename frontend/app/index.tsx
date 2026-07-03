@@ -226,7 +226,10 @@ export default function EditorScreen() {
     });
   };
 
-  // When returning from AI screen, apply any pending "insert at cursor" payload.
+  // When returning from AI screen or Snippets, apply any pending "insert at cursor" payload
+  // after the file has finished loading (avoid the load overwriting our insertion).
+  const pendingInsertRef = useRef<string | null>(null);
+
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
@@ -234,8 +237,7 @@ export default function EditorScreen() {
         const pending = await AsyncStorage.getItem("syntax.pending_insert");
         if (!cancelled && pending) {
           await AsyncStorage.removeItem("syntax.pending_insert");
-          insertAtCursor(pending);
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          pendingInsertRef.current = pending;
         }
       })();
       return () => {
@@ -243,6 +245,17 @@ export default function EditorScreen() {
       };
     }, []),
   );
+
+  useEffect(() => {
+    if (loading) return;
+    if (!activeFile) return;
+    const pending = pendingInsertRef.current;
+    if (!pending) return;
+    pendingInsertRef.current = null;
+    insertAtCursor(pending);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, activeFileId]);
 
   const explainSelection = async () => {
     if (!activeFile) return;

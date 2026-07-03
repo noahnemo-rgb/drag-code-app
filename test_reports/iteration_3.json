@@ -1,0 +1,42 @@
+{
+  "summary": "Retest after fixes: ALL prior regressions PASS and both flagged frontend layout bugs are RESOLVED. Backend pytest: 33/33 pass in 19.77s — health, projects CRUD, files CRUD, run (py/js/ts via tsx/html/css), timeout, chat stream+history+clear, snippets CRUD, star toggle idempotency, is_starred, delete authorship guard (403) + cascade. Frontend @ 390x844: (a) SnippetDetailModal 'Insert at Cursor' button now bbox y=791, height=40 → y+h=831 ≤ 844 (in viewport, previously ~1635). (b) PublishModal 'Publish' submit button also bbox y=791, y+h=831 ≤ 844 (fully reachable). (c) Insert-at-Cursor end-to-end verified: opened Fibonacci python snippet detail sheet → tapped detail-insert-btn → navigated back to `/` → visible editor textarea (data-testid=code-input) contains 112 chars including 'def fib(n):', 'return fib(n-1) + fib(n-2)', AND preserved original 'print(\\'Hello from Syntax IDE\\')' (staged pending_insert applied after refreshProjects, exactly per fix note). (d) No new regressions: Find bar opens & closes; python 'print(...)' run returns stdout 'Hello from Syntax IDE'; AI Assistant screen loads with chat-input + chat-send-btn testIDs (chat streaming already covered by pytest test_chat_stream and test_history_after_chat which persist and return >=1 message). Minor issue: duplicate mounts of the code editor result in TWO DOM textareas both carrying data-testid='code-input' — the first is hidden and stale, the second visible and authoritative. Also carried-over: 'props.pointerEvents is deprecated' console warning.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Editor code-input", "issue": "Two DOM textareas share data-testid='code-input' — first is hidden with stale text (offsetWidth=0, length 31), second visible with fresh text (length 112). Likely a stale unmount/duplicate render of the editor when returning from another route. Not user-facing but breaks single-element testID contract and could indicate a memory/state leak. Reference: /app/frontend/app/index.tsx:635 (testID='code-input').", "testID": "code-input", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "View/Pressable", "issue": "Console warning: 'props.pointerEvents is deprecated. Use style.pointerEvents' — carried over from iteration 1 & 2, still present. Reference: any component passing pointerEvents as prop (grep for 'pointerEvents=' in /app/frontend/app/)."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_backend_api.py",
+    "/app/backend/tests/test_snippets.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "OPTIONAL: Investigate why two [data-testid='code-input'] textareas exist in the DOM at the same time. Likely a leftover mount from the previous focused-file (fast route re-focus). Ensure the editor unmounts cleanly or key the TextInput by fileId so only one instance is present.",
+    "OPTIONAL: Replace deprecated `pointerEvents` prop with `style.pointerEvents` to silence the console warning (react-native-web migration)."
+  ],
+  "critical_code_review_comments": [
+    "SnippetDetailModal + PublishModal fixed by pinning backdrop height via useWindowDimensions — verified: submit/insert buttons now at y+h=831 (viewport 844).",
+    "pending_insert race fixed via ref staging in useFocusEffect + follow-up useEffect([loading, activeFileId]) — verified end-to-end insertion into the editor after route change.",
+    "server.py: snippet endpoints correctly exclude _id and clamp stars ≥ 0 (server.py:451). Idempotent star tracked in snippet_stars collection.",
+    "TS runs via tsx (server.py:276-281); real TS annotation returns 42."
+  ],
+  "updated_files": [
+    "/app/test_reports/iteration_3.json (new)",
+    "/app/test_reports/pytest/pytest_results.xml (regenerated)"
+  ],
+  "success_rate": {"backend": "100% (33/33)", "frontend": "100% for requested regression items — SnippetDetailModal button in-viewport, PublishModal button in-viewport, Insert-at-Cursor inserts snippet code with original preserved, Find bar opens, python run works, AI screen loads."},
+  "seed_data_creation": "Pytest creates TEST_-prefixed snippets and self-cleans. Two pre-seeded snippets (Fibonacci by Ada, Debounce by Grace) remain.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Base URL https://drag-code-app.preview.emergentagent.com. Run pytest /app/backend/tests/ (33 tests ~20s). Key mobile testIDs: run-code-btn, open-ai-btn, open-snippets-btn, toggle-find-btn, find-input, find-close, code-input (NOTE: two exist — pick offsetWidth>0), open-publish-btn, publish-modal, submit-publish-btn, snippet-detail, detail-insert-btn, snippet-search-input, chat-input, chat-send-btn. Verified bbox y+h values at 390x844: submit-publish-btn=831, detail-insert-btn=831. Insert-at-Cursor confirmed via evaluate() reading the visible textarea (length ~112 after inserting Fibonacci snippet).",
+  "rca_of_issue": "N/A — fixes from previous iteration are all verified working. Only observation: duplicate code-input DOM node (one hidden, one visible) — likely a stale editor mount on route return; not blocking any user flow."
+}

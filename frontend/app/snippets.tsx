@@ -15,6 +15,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -320,10 +321,11 @@ function SnippetDetailModal({
   onStar: () => void;
   onInsert: () => void;
 }) {
+  const { height } = useWindowDimensions();
   if (!snippet) return null;
   return (
     <Modal visible transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.detailBackdrop}>
+      <View style={[styles.detailBackdrop, { height }]}>
         <View style={styles.detailSheet} testID="snippet-detail">
           <View style={styles.sheetHeader}>
             <Text style={styles.sheetTitle}>{snippet.title}</Text>
@@ -384,6 +386,7 @@ function PublishModal({
   onClose: () => void;
   onPublished: (s: Snippet) => void;
 }) {
+  const { height } = useWindowDimensions();
   const [author, setAuthor] = useState("");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -470,7 +473,7 @@ function PublishModal({
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : undefined}
-        style={styles.detailBackdrop}
+        style={[styles.detailBackdrop, { height }]}
       >
         <View style={[styles.detailSheet, { maxHeight: "92%" }]} testID="publish-modal">
           <View style={styles.sheetHeader}>
