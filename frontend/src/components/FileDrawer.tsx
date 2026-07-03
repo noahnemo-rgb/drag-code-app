@@ -159,20 +159,23 @@ export function FileDrawer({
             <Feather name="external-link" size={14} color={COLORS.onSurfaceSecondary} />
           </Pressable>
 
-          <Pressable
-            onPress={toggleEpisode}
-            style={[styles.episodeBtn, episodeEnabled && styles.episodeBtnActive]}
-            testID="episode-toggle"
-          >
-            <View style={[styles.episodeIcon, episodeEnabled && { borderColor: COLORS.brand }]}>
-              <Feather name="moon" size={13} color={episodeEnabled ? COLORS.brand : COLORS.onSurfaceSecondary} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.footerLabel}>Episode Mode</Text>
-              <Text style={styles.footerSub} numberOfLines={1}>
-                {episodeEnabled ? "Dim · portrait · keystroke autosave" : "For vertigo / bedridden use"}
-              </Text>
-            </View>
+          <View style={[styles.episodeBtn, episodeEnabled && styles.episodeBtnActive]} testID="episode-toggle">
+            <Pressable
+              onPress={toggleEpisode}
+              hitSlop={4}
+              style={{ flexDirection: "row", alignItems: "center", gap: SPACING.sm, flex: 1 }}
+              testID="episode-row"
+            >
+              <View style={[styles.episodeIcon, episodeEnabled && { borderColor: COLORS.brand }]}>
+                <Feather name="moon" size={13} color={episodeEnabled ? COLORS.brand : COLORS.onSurfaceSecondary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.footerLabel}>Episode Mode</Text>
+                <Text style={styles.footerSub} numberOfLines={1}>
+                  {episodeEnabled ? "Dim · portrait · keystroke autosave" : "For vertigo / bedridden use"}
+                </Text>
+              </View>
+            </Pressable>
             <Switch
               value={episodeEnabled}
               onValueChange={toggleEpisode}
@@ -180,7 +183,7 @@ export function FileDrawer({
               thumbColor={COLORS.onSurface}
               testID="episode-switch"
             />
-          </Pressable>
+          </View>
 
           <View style={styles.footerRow}>
             <View style={{ flex: 1 }}>

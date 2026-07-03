@@ -1005,10 +1005,9 @@ export default function EditorScreen() {
             <View
               style={[
                 styles.pushDot,
-                { backgroundColor: silentPushStatus === "ok" ? COLORS.success ?? "#4ade80" : "#ef4444" },
+                { backgroundColor: silentPushStatus === "ok" ? COLORS.success ?? "#4ade80" : "#ef4444", pointerEvents: "none" as const },
               ]}
               testID={`push-dot-${silentPushStatus}`}
-              pointerEvents="none"
             />
           ) : null}
         </View>
@@ -1404,7 +1403,6 @@ export default function EditorScreen() {
       {/* Episode Mode dimming overlay — captures nothing, purely visual. */}
       {episodeEnabled ? (
         <View
-          pointerEvents="none"
           style={styles.episodeDim}
           testID="episode-overlay"
         />
@@ -1507,6 +1505,7 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     backgroundColor: "rgba(0,0,0,0.18)",
+    pointerEvents: "none",
   },
 
   filename: {

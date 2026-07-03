@@ -1,0 +1,36 @@
+{
+  "summary": "Frontend-only retest of the two HIGH bugs from iteration 12 (Episode Mode). BOTH fixes verified PASSING on 390x844 web preview. Fix 1 (Switch double-toggle): tapping [data-testid=episode-switch] now flips state exactly once (null→1→0), and tapping [data-testid=episode-row] also single-toggles (0→1→0) — AsyncStorage key 'syntax.episode.enabled' reflects the current state after every tap. Fix 2a (silent-push fallback modal): with episode ON and no PAT/config, tapping [data-testid=open-push-btn] opens [data-testid=push-modal] within ~150ms. Fix 2b (happy path with dummy PAT): after seeding syntax.gh_pat + syntax.gh_cfg + syntax.episode.enabled=1 and reloading, tapping open-push-btn shows [data-testid=push-dot-err] within ~300ms (401 as expected) and push-modal does NOT appear. Regressions PASS: with Episode OFF, open-push-btn opens push-modal normally and no push-dot appears; overlay + moon badge appear when Episode is toggled ON and disappear when toggled OFF. NOTE: the same deprecation warnings from iter 12 still fire in the console (props.pointerEvents on episode-overlay/push-dot, and shadow* style on savedToast) — not blocking but should be migrated.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {
+        "component": "episode-overlay / push-dot",
+        "issue": "Deprecated `pointerEvents` prop on View. Console warns: 'props.pointerEvents is deprecated. Use style.pointerEvents'. Reference: /app/frontend/app/index.tsx (episode-overlay ~L1407 and push-dot ~L1010). Migrate to style={{ pointerEvents: 'none' }}."
+      },
+      {
+        "component": "savedToast (shadow* styles)",
+        "issue": "Deprecated 'shadow*' style props. Console warns: '\"shadow*\" style props are deprecated. Use \"boxShadow\"'. Reference: /app/frontend/app/index.tsx savedToast style (~L1454)."
+      }
+    ]
+  },
+  "test_report_links": ["/app/test_reports/iteration_13.json"],
+  "action_items": [
+    "MINOR (carry-over from iter 12): Replace deprecated `pointerEvents` prop with `style.pointerEvents` on episode-overlay and push-dot Views.",
+    "MINOR (carry-over from iter 12): Replace deprecated shadow* styles with `boxShadow` on savedToast style.",
+    "OPTIONAL CODE-REVIEW: /app/frontend/app/index.tsx L535 reads `res.ok` on the return of `pushToGitHub()`, but `pushToGitHub` returns `{ commitSha, url }` (no `.ok` field). This means the success branch NEVER sets 'ok' — it always falls into 'err' unless an exception is thrown. Today's retest didn't hit the happy branch (dummy PAT throws, hits catch), so it wasn't observable, but a real successful push would still show push-dot-err instead of push-dot-ok. Suggest either returning `{ ok: true, ... }` from `pushToGitHub` or setting status to 'ok' unconditionally after the awaited call resolves without throwing."
+  ],
+  "critical_code_review_comments": [
+    "FileDrawer.tsx episode-toggle split (View wrapper + inner Pressable + sibling Switch) works correctly and is the canonical fix. Behavior confirmed: only one handler fires per tap regardless of which sub-element is pressed.",
+    "app/index.tsx L535 latent bug: `setSilentPushStatus(res.ok ? 'ok' : 'err')` — `pushToGitHub` return type has no `ok`; success will incorrectly render push-dot-err. Not exercised in this retest but should be fixed."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (frontend-only)", "frontend": "5/5 requested scenarios PASS (Fix1 switch, Fix1 row, Fix2a fallback modal, Fix2b dot-err happy path, Ep-OFF regression, overlay/badge regression)"},
+  "seed_data_creation": "For Fix 2b happy-path: seeded localStorage keys syntax.gh_pat='ghp_dummy_1234567890', syntax.gh_cfg={owner:'octocat', repo:'hello-world', branch:'main', path:'src/hello.py'}, syntax.episode.enabled='1', then reloaded.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Both HIGH bugs from iter 12 are fixed and verified. Only carry-over items are minor deprecation warnings (pointerEvents prop, shadow* styles) and one latent bug at index.tsx L535 where `res.ok` is read from `pushToGitHub`'s return which has no `ok` field — success case would erroneously show push-dot-err. Use [data-testid=open-drawer-btn] to open the drawer (NOT 'menu-btn'). AsyncStorage key 'syntax.episode.enabled' is the source of truth (values '1' | '0' | null==='0'). When chaining multiple push-modal + drawer scenarios, RELOAD the page between them — leftover modal state can block subsequent taps on the drawer in this env.",
+  "rca_of_issue": "Iter-12 double-toggle RCA: solved by moving the Switch out of the Pressable subtree — FileDrawer.tsx L162-186 now uses <View testID='episode-toggle'> as an outer container, with an inner Pressable testID='episode-row' (owning the label/icon tap) and a sibling Switch testID='episode-switch' with its own onValueChange. Only one handler fires per interaction. Iter-12 silent-push fallback RCA: the earlier 'modal did not open' finding was a timing/ordering artifact — silentGithubPush() was correctly calling setShowPush(true) all along; today's isolated retest shows push-modal appears at ~150ms after tap when episode is ON and no config is saved."
+}
