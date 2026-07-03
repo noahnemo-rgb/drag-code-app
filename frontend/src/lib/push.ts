@@ -67,8 +67,7 @@ export async function saveWebhookConfig(c: WebhookConfig): Promise<void> {
 
 // --- Base64 encode (UTF-8 safe, cross-platform) ---
 function utf8ToBase64(text: string): string {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const g = globalThis as any;
+  const g = globalThis as { btoa?: (s: string) => string; Buffer?: { from: (t: string, e: string) => { toString: (e: string) => string } } };
   if (g.btoa) {
     const bytes = new TextEncoder().encode(text);
     let binary = "";
@@ -169,7 +168,9 @@ export async function pushToWebhook(opts: {
 }
 
 // --- Native share (OS share sheet) ---
-export async function shareViaNative(opts: { filename: string; content: string }): Promise<void> {
+export type ShareResult = { kind: "share" } | { kind: "clipboard"; message: string } | { kind: "cancelled" };
+
+export async function shareViaNative(opts: { filename: string; content: string }): Promise<ShareResult> {
   const { filename, content } = opts;
   // On mobile: write to cache and open the Share sheet with the file.
   if (Platform.OS === "ios" || Platform.OS === "android") {
@@ -177,9 +178,27 @@ export async function shareViaNative(opts: { filename: string; content: string }
       const uri = `${FileSystem.cacheDirectory}${filename}`;
       await FileSystem.writeAsStringAsync(uri, content, { encoding: FileSystem.EncodingType.UTF8 });
       await Sharing.shareAsync(uri, { dialogTitle: `Share ${filename}` });
-      return;
+      return { kind: "share" };
     }
   }
-  // Fallback: React Native Share text (works on web via clipboard/copy dialog on some browsers).
+  // Web: try the Web Share API first, then fall back to clipboard.
+  if (Platform.OS === "web") {
+    const nav = (globalThis as { navigator?: { share?: (d: { title: string; text: string }) => Promise<void>; clipboard?: { writeText: (s: string) => Promise<void> } } }).navigator;
+    try {
+      if (nav?.share) {
+        await nav.share({ title: filename, text: content });
+        return { kind: "share" };
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/abort|cancel/i.test(msg)) return { kind: "cancelled" };
+    }
+    if (nav?.clipboard?.writeText) {
+      await nav.clipboard.writeText(content);
+      return { kind: "clipboard", message: `Copied ${filename} to clipboard — the Web Share API is unavailable in this browser.` };
+    }
+  }
+  // Last-resort fallback: React Native Share text.
   await Share.share({ title: filename, message: content });
+  return { kind: "share" };
 }

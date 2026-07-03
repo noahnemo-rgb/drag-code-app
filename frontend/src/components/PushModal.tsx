@@ -135,8 +135,10 @@ export function PushModal({
     setStatus(null);
     setBusy(true);
     try {
-      await shareViaNative({ filename, content });
-      setStatus({ ok: true, text: "Share sheet opened." });
+      const r = await shareViaNative({ filename, content });
+      if (r.kind === "share") setStatus({ ok: true, text: "Share sheet opened." });
+      else if (r.kind === "clipboard") setStatus({ ok: true, text: r.message });
+      else setStatus({ ok: true, text: "Share cancelled." });
     } catch (e) {
       setStatus({ ok: false, text: e instanceof Error ? e.message : String(e) });
     } finally {

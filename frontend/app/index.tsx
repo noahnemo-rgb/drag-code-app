@@ -844,7 +844,17 @@ export default function EditorScreen() {
         <Pressable onPress={openDrawer} style={styles.iconBtn} testID="open-drawer-btn" hitSlop={8}>
           <Feather name="menu" size={22} color={COLORS.onSurface} />
         </Pressable>
-        <Pressable style={styles.filenameWrap} onPress={() => setShowLangMenu(true)} testID="filename-lang-picker">
+        <Pressable
+          style={styles.filenameWrap}
+          onPress={() => setShowLangMenu(true)}
+          onLongPress={() => {
+            setCommandQuery("");
+            setCommandIndex(0);
+            setShowCommandPalette(true);
+          }}
+          delayLongPress={350}
+          testID="filename-lang-picker"
+        >
           <Text style={styles.filename} numberOfLines={1} testID="active-filename">
             {activeFile?.name ?? "No file"}
           </Text>
