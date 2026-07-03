@@ -349,6 +349,82 @@ export default function EditorScreen() {
     setFiles((prev) => prev.map((f) => (f.id === activeFile.id ? { ...f, language: lang } : f)));
   };
 
+  // ---- Find & Replace ----
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [replaceQuery, setReplaceQuery] = useState("");
+  const [caseSensitive, setCaseSensitive] = useState(false);
+  const [matchIndex, setMatchIndex] = useState(0);
+
+  const matches = useMemo<{ start: number; end: number }[]>(() => {
+    if (!findQuery) return [];
+    const out: { start: number; end: number }[] = [];
+    const hay = caseSensitive ? content : content.toLowerCase();
+    const needle = caseSensitive ? findQuery : findQuery.toLowerCase();
+    if (!needle) return out;
+    let i = 0;
+    while (i <= hay.length - needle.length) {
+      const idx = hay.indexOf(needle, i);
+      if (idx === -1) break;
+      out.push({ start: idx, end: idx + needle.length });
+      i = idx + needle.length;
+    }
+    return out;
+  }, [content, findQuery, caseSensitive]);
+
+  const jumpToMatch = useCallback(
+    (i: number) => {
+      if (matches.length === 0) return;
+      const safe = ((i % matches.length) + matches.length) % matches.length;
+      setMatchIndex(safe);
+      const m = matches[safe];
+      selectionRef.current = { start: m.start, end: m.end };
+      setForcedSelection({ start: m.start, end: m.end });
+      setTimeout(() => setForcedSelection(undefined), 60);
+    },
+    [matches],
+  );
+
+  useEffect(() => {
+    // Reset index when matches change
+    if (matches.length === 0) {
+      setMatchIndex(0);
+      return;
+    }
+    if (matchIndex >= matches.length) setMatchIndex(0);
+  }, [matches, matchIndex]);
+
+  const replaceCurrent = () => {
+    if (matches.length === 0) return;
+    const m = matches[matchIndex];
+    setContent((c) => c.slice(0, m.start) + replaceQuery + c.slice(m.end));
+    const newPos = m.start + replaceQuery.length;
+    selectionRef.current = { start: newPos, end: newPos };
+    setForcedSelection({ start: newPos, end: newPos });
+    setTimeout(() => setForcedSelection(undefined), 60);
+  };
+
+  const replaceAll = () => {
+    if (matches.length === 0) return;
+    // Rebuild content in one pass since matches are non-overlapping and sorted.
+    let out = "";
+    let cursor = 0;
+    for (const m of matches) {
+      out += content.slice(cursor, m.start) + replaceQuery;
+      cursor = m.end;
+    }
+    out += content.slice(cursor);
+    setContent(out);
+    setMatchIndex(0);
+  };
+
+  const closeFind = () => {
+    setFindOpen(false);
+    setFindQuery("");
+    setReplaceQuery("");
+    setMatchIndex(0);
+  };
+
   const lines = content.length ? content.split("\n") : [""];
   const lang: Language = activeFile?.language ?? "javascript";
 
@@ -372,6 +448,12 @@ export default function EditorScreen() {
           </Text>
           <Text style={styles.langLabel}>{LANGS.find((l) => l.key === lang)?.label ?? "—"}</Text>
         </Pressable>
+        <Pressable onPress={() => router.push("/snippets")} style={styles.iconBtn} testID="open-snippets-btn" hitSlop={8}>
+          <Feather name="package" size={20} color={COLORS.onSurface} />
+        </Pressable>
+        <Pressable onPress={() => setFindOpen((v) => !v)} style={styles.iconBtn} testID="toggle-find-btn" hitSlop={8}>
+          <Feather name="search" size={20} color={findOpen ? COLORS.brand : COLORS.onSurface} />
+        </Pressable>
         <Pressable onPress={() => router.push("/ai")} style={styles.iconBtn} testID="open-ai-btn" hitSlop={8}>
           <Feather name="cpu" size={20} color={COLORS.onSurface} />
         </Pressable>
@@ -389,6 +471,86 @@ export default function EditorScreen() {
           <Text style={styles.runBtnLabel}>Run</Text>
         </Pressable>
       </View>
+
+      {/* Find & Replace bar */}
+      {findOpen ? (
+        <View style={styles.findBar} testID="find-bar">
+          <View style={styles.findRow}>
+            <Feather name="search" size={14} color={COLORS.onSurfaceSecondary} />
+            <TextInput
+              value={findQuery}
+              onChangeText={setFindQuery}
+              placeholder="Find"
+              placeholderTextColor={COLORS.onSurfaceSecondary}
+              style={styles.findInput}
+              autoCapitalize="none"
+              autoCorrect={false}
+              testID="find-input"
+            />
+            <Text style={styles.findCount} testID="find-count">
+              {matches.length === 0 ? "0/0" : `${matchIndex + 1}/${matches.length}`}
+            </Text>
+            <Pressable
+              onPress={() => setCaseSensitive((v) => !v)}
+              style={[styles.findMiniBtn, caseSensitive && styles.findMiniBtnActive]}
+              testID="case-toggle"
+              hitSlop={6}
+            >
+              <Text style={[styles.findMiniLabel, caseSensitive && { color: COLORS.brand }]}>Aa</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => jumpToMatch(matchIndex - 1)}
+              disabled={matches.length === 0}
+              style={[styles.findIconBtn, matches.length === 0 && { opacity: 0.4 }]}
+              testID="find-prev"
+              hitSlop={6}
+            >
+              <Feather name="chevron-up" size={16} color={COLORS.onSurface} />
+            </Pressable>
+            <Pressable
+              onPress={() => jumpToMatch(matchIndex + 1)}
+              disabled={matches.length === 0}
+              style={[styles.findIconBtn, matches.length === 0 && { opacity: 0.4 }]}
+              testID="find-next"
+              hitSlop={6}
+            >
+              <Feather name="chevron-down" size={16} color={COLORS.onSurface} />
+            </Pressable>
+            <Pressable onPress={closeFind} style={styles.findIconBtn} testID="find-close" hitSlop={6}>
+              <Feather name="x" size={16} color={COLORS.onSurface} />
+            </Pressable>
+          </View>
+          <View style={styles.findRow}>
+            <Feather name="corner-down-right" size={14} color={COLORS.onSurfaceSecondary} />
+            <TextInput
+              value={replaceQuery}
+              onChangeText={setReplaceQuery}
+              placeholder="Replace"
+              placeholderTextColor={COLORS.onSurfaceSecondary}
+              style={styles.findInput}
+              autoCapitalize="none"
+              autoCorrect={false}
+              testID="replace-input"
+            />
+            <Pressable
+              onPress={replaceCurrent}
+              disabled={matches.length === 0}
+              style={[styles.findActionBtn, matches.length === 0 && { opacity: 0.4 }]}
+              testID="replace-one-btn"
+            >
+              <Text style={styles.findActionLabel}>Replace</Text>
+            </Pressable>
+            <Pressable
+              onPress={replaceAll}
+              disabled={matches.length === 0}
+              style={[styles.findActionBtn, matches.length === 0 && { opacity: 0.4 }]}
+              testID="replace-all-btn"
+            >
+              <Text style={styles.findActionLabel}>All</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
 
       {/* Editor */}
       <KeyboardAvoidingView
@@ -820,6 +982,66 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.md,
   },
   runBtnLabel: { color: COLORS.onBrand, fontWeight: "700", fontSize: TEXT.sm },
+
+  findBar: {
+    backgroundColor: COLORS.surfaceSecondary,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.divider,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: SPACING.sm,
+    gap: SPACING.xs,
+  },
+  findRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SPACING.xs,
+  },
+  findInput: {
+    flex: 1,
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.sm,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 6,
+    color: COLORS.onSurface,
+    fontFamily: FONT.mono,
+    fontSize: TEXT.sm,
+  },
+  findCount: {
+    color: COLORS.onSurfaceSecondary,
+    fontFamily: FONT.mono,
+    fontSize: TEXT.sm - 1,
+    minWidth: 40,
+    textAlign: "right",
+  },
+  findMiniBtn: {
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 4,
+    borderRadius: RADIUS.sm,
+    backgroundColor: COLORS.surfaceTertiary,
+  },
+  findMiniBtnActive: {
+    backgroundColor: COLORS.brandTertiary,
+  },
+  findMiniLabel: { color: COLORS.onSurface, fontFamily: FONT.mono, fontSize: TEXT.sm },
+  findIconBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: RADIUS.sm,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.surfaceTertiary,
+  },
+  findActionBtn: {
+    paddingHorizontal: SPACING.md,
+    paddingVertical: 6,
+    borderRadius: RADIUS.sm,
+    backgroundColor: COLORS.surfaceTertiary,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  findActionLabel: { color: COLORS.onSurface, fontSize: TEXT.sm, fontWeight: "600" },
 
   centerFill: { flex: 1, alignItems: "center", justifyContent: "center", padding: SPACING.xl, gap: SPACING.md },
   emptyTitle: { color: COLORS.onSurface, fontSize: TEXT.lg, fontWeight: "600" },

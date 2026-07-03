@@ -60,7 +60,49 @@ export const api = {
     ),
   clearChatHistory: (sessionId: string) =>
     j<{ ok: boolean }>(`/chat/history/${sessionId}`, { method: "DELETE" }),
+
+  listSnippets: (params: { language?: Language; q?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.language) qs.set("language", params.language);
+    if (params.q) qs.set("q", params.q);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return j<Snippet[]>(`/snippets${suffix}`);
+  },
+  createSnippet: (data: SnippetCreate) =>
+    j<Snippet>("/snippets", { method: "POST", body: JSON.stringify(data) }),
+  starSnippet: (id: string, deviceId: string) =>
+    j<Snippet>(`/snippets/${id}/star`, {
+      method: "POST",
+      body: JSON.stringify({ device_id: deviceId }),
+    }),
+  isStarred: (id: string, deviceId: string) =>
+    j<{ starred: boolean }>(`/snippets/${id}/starred?device_id=${encodeURIComponent(deviceId)}`),
+  deleteSnippet: (id: string, deviceId: string) =>
+    j<{ ok: boolean }>(`/snippets/${id}?device_id=${encodeURIComponent(deviceId)}`, { method: "DELETE" }),
 };
+
+export interface Snippet {
+  id: string;
+  author: string;
+  author_device?: string;
+  title: string;
+  description: string;
+  language: Language;
+  code: string;
+  tags: string[];
+  stars: number;
+  created_at: string;
+}
+
+export interface SnippetCreate {
+  author: string;
+  author_device?: string;
+  title: string;
+  description?: string;
+  language: Language;
+  code: string;
+  tags?: string[];
+}
 
 export const streamChat = async (
   sessionId: string,

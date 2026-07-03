@@ -367,6 +367,113 @@ async def clear_chat_history(session_id: str):
 
 
 # -----------------------------
+# Snippets Marketplace
+# -----------------------------
+
+class Snippet(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    author: str
+    author_device: Optional[str] = None
+    title: str
+    description: str = ""
+    language: Language
+    code: str
+    tags: List[str] = Field(default_factory=list)
+    stars: int = 0
+    created_at: str = Field(default_factory=now_iso)
+
+
+class SnippetCreate(BaseModel):
+    author: str
+    author_device: Optional[str] = None
+    title: str
+    description: str = ""
+    language: Language
+    code: str
+    tags: List[str] = Field(default_factory=list)
+
+
+class StarRequest(BaseModel):
+    device_id: str
+
+
+@api_router.post("/snippets", response_model=Snippet)
+async def create_snippet(payload: SnippetCreate):
+    if not payload.title.strip() or not payload.code.strip():
+        raise HTTPException(status_code=400, detail="title and code are required")
+    s = Snippet(**payload.model_dump())
+    await db.snippets.insert_one(s.model_dump())
+    return s
+
+
+@api_router.get("/snippets", response_model=List[Snippet])
+async def list_snippets(language: Optional[Language] = None, q: Optional[str] = None, limit: int = 50):
+    filt: dict = {}
+    if language:
+        filt["language"] = language
+    if q:
+        filt["$or"] = [
+            {"title": {"$regex": q, "$options": "i"}},
+            {"description": {"$regex": q, "$options": "i"}},
+            {"tags": {"$regex": q, "$options": "i"}},
+        ]
+    docs = await db.snippets.find(filt, {"_id": 0}).sort("created_at", -1).to_list(min(max(limit, 1), 200))
+    return [Snippet(**d) for d in docs]
+
+
+@api_router.get("/snippets/{snippet_id}", response_model=Snippet)
+async def get_snippet(snippet_id: str):
+    doc = await db.snippets.find_one({"id": snippet_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Snippet not found")
+    return Snippet(**doc)
+
+
+@api_router.post("/snippets/{snippet_id}/star", response_model=Snippet)
+async def star_snippet(snippet_id: str, req: StarRequest):
+    # Idempotent star: track (snippet_id, device_id) pairs; toggle count accordingly.
+    existing = await db.snippet_stars.find_one({"snippet_id": snippet_id, "device_id": req.device_id})
+    if existing:
+        await db.snippet_stars.delete_one({"snippet_id": snippet_id, "device_id": req.device_id})
+        delta = -1
+    else:
+        await db.snippet_stars.insert_one({"snippet_id": snippet_id, "device_id": req.device_id, "created_at": now_iso()})
+        delta = 1
+    doc = await db.snippets.find_one_and_update(
+        {"id": snippet_id},
+        {"$inc": {"stars": delta}},
+        return_document=True,
+        projection={"_id": 0},
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Snippet not found")
+    # Clamp to non-negative
+    if doc["stars"] < 0:
+        await db.snippets.update_one({"id": snippet_id}, {"$set": {"stars": 0}})
+        doc["stars"] = 0
+    return Snippet(**doc)
+
+
+@api_router.get("/snippets/{snippet_id}/starred")
+async def is_starred(snippet_id: str, device_id: str):
+    existing = await db.snippet_stars.find_one({"snippet_id": snippet_id, "device_id": device_id})
+    return {"starred": existing is not None}
+
+
+@api_router.delete("/snippets/{snippet_id}")
+async def delete_snippet(snippet_id: str, device_id: str):
+    doc = await db.snippets.find_one({"id": snippet_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Snippet not found")
+    # Only the original author (matched by device_id-derived author key) can delete.
+    if doc.get("author_device") and doc["author_device"] != device_id:
+        raise HTTPException(status_code=403, detail="Not allowed")
+    await db.snippets.delete_one({"id": snippet_id})
+    await db.snippet_stars.delete_many({"snippet_id": snippet_id})
+    return {"ok": True}
+
+
+# -----------------------------
 # App wiring
 # -----------------------------
 
