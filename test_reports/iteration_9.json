@@ -1,0 +1,30 @@
+{
+  "summary": "Phase-1 refactor regression on Expo web preview (390x844). All 13 review-request checks pass. Extracted components (CommandPaletteModal, QuickFileSwitcherModal, PromptModal, Sheet, HighlightedText) and lib/language.ts are wired correctly — testIDs, keyboard nav, MRU/RECENT badges, section grouping, long-press-to-palette, PromptModal (new-project), New File modal, Push modal (all three tabs + open from both entry points), Escape-closes-any-overlay all preserved. No prop-wiring regressions detected. Only observation: on headless web, navigator.clipboard.writeText is permission-denied so the Share tab's success message reads 'Failed to execute writeText on Clipboard…' instead of the green 'Copied to clipboard' — this is a known headless-env limitation, not a refactor regression (share button + tab render correctly; underlying code path shareViaNative → clipboard fallback → status text is unchanged).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "shadow* style props", "issue": "React Native Web deprecation warning: 'shadow*' style props are deprecated, use 'boxShadow'. Fires on savedToast (styles.savedToast in app/index.tsx around lines 1474-1478) and possibly other shadowed elements. Non-blocking. Reference: /app/frontend/app/index.tsx:1474"},
+      {"component": "props.pointerEvents", "issue": "React Native Web deprecation warning: props.pointerEvents is deprecated; use style.pointerEvents. Fires from <View pointerEvents=\"box-none\">/<View pointerEvents=\"none\"> usages (savedToast wrap + explainPillWrap). Reference: /app/frontend/app/index.tsx:1027,1037"}
+    ]
+  },
+  "test_report_links": ["/app/test_reports/iteration_9.json"],
+  "action_items": [
+    "Nit: migrate remaining `shadow*` styles to `boxShadow` and `pointerEvents` prop to `style.pointerEvents` in app/index.tsx to silence RN-Web deprecation warnings.",
+    "Consider extracting the remaining inline modals (New File modal ~50 lines, Bluetooth info modal, Shortcuts modal, Language menu modal) into components/ in Phase 2 — index.tsx is still 1889 lines, well above the 700-line guideline."
+  ],
+  "critical_code_review_comments": [
+    "index.tsx is 1889 lines after Phase 1 (down from 2329). Still above 700-line guideline; extractions targeted for Phase 2 are the four remaining inline Modal blocks and the drawer component.",
+    "CommandPaletteModal.tsx and QuickFileSwitcherModal.tsx use an `onIndexChange: (updater: (i: number) => number) => void` prop shape. This matches React's functional setState signature which the parent passes directly (`setCommandIndex` / `setQuickFileIndex`). Works, but the type is slightly leaky — a `Dispatch<SetStateAction<number>>` from react would be more idiomatic. Non-blocking.",
+    "Section header <View testID='quick-section-<kind>'> still has no accessibilityRole='header' (carry-over from iteration 8)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a", "frontend": "100%"},
+  "seed_data_creation": "None. Used localStorage.clear() before test to reset MRU state.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Phase-1 refactor is stable. Regression suite verified: default hello.py loads, Cmd+Shift+P opens command-palette-modal, Cmd+P opens quick-file-modal, 'hello' query produces quick-section-file + quick-section-line grouped sections in correct order, ArrowDown/Enter over quickResults skips section headers (they are non-interactive Views), command-find fires find bar, command-push opens push-modal (also via header upload-cloud button), push-modal exposes push-tab-github / push-tab-webhook / push-tab-share, long-press on filename-lang-picker (>350ms) opens command palette while short-press opens language menu, drawer new-project-btn opens PromptModal with testID prompt-input, new-file-btn opens new-file-modal and confirm-new-file creates the file and switches to it, Escape closes push→cmd-palette→quick-file→shortcuts→find→lang-menu→new-file→new-project→bt-info in that priority order (already covered in useEditorShortcuts.onEscape). MRU keys are 'syntax.recent_commands' and 'syntax.recent_files'. Share-tab clipboard fallback message only shows the 'green' success text when navigator.clipboard.writeText resolves; in headless Playwright it rejects with permission denied — not a refactor issue.",
+  "rca_of_issue": "N/A — no defects observed."
+}

@@ -29,23 +29,19 @@ import { FileItem, Language, Project, Snippet } from "@/src/lib/api";
 import { highlightLine, PALETTE } from "@/src/lib/highlight";
 import { store } from "@/src/lib/store";
 import { settings, SyncMode } from "@/src/lib/storage";
-import { fuzzyScore, highlightMatches } from "@/src/lib/fuzzy";
-import { isRecent, loadMru, pushMru, recencyBonus, sortByMru } from "@/src/lib/mru";
+import { fuzzyScore } from "@/src/lib/fuzzy";
+import { LANGS, inferLang, starterFor } from "@/src/lib/language";
+import { loadMru, pushMru, recencyBonus, sortByMru } from "@/src/lib/mru";
+import { CommandPaletteModal, type PaletteCommand } from "@/src/components/CommandPaletteModal";
+import { PromptModal } from "@/src/components/PromptModal";
 import { PushModal } from "@/src/components/PushModal";
+import { QuickFileSwitcherModal, type QuickResult } from "@/src/components/QuickFileSwitcherModal";
 import { useEditorShortcuts } from "@/src/hooks/use-editor-shortcuts";
 import { COLORS, FONT, RADIUS, SPACING, TEXT } from "@/src/theme";
 
 const EDITOR_FONT_SIZE = 13;
 const EDITOR_LINE_HEIGHT = 20;
 const GUTTER_WIDTH = 44;
-
-const LANGS: { key: Language; label: string; ext: string }[] = [
-  { key: "javascript", label: "JavaScript", ext: "js" },
-  { key: "typescript", label: "TypeScript", ext: "ts" },
-  { key: "python", label: "Python", ext: "py" },
-  { key: "html", label: "HTML", ext: "html" },
-  { key: "css", label: "CSS", ext: "css" },
-];
 
 const SYMBOLS = ["{", "}", "(", ")", "[", "]", "<", ">", ";", ":", "=", "+", "-", "*", "/", "\"", "'", "`", ",", ".", "!", "?", "&", "|", "#", "$", "@", "%"];
 
@@ -59,29 +55,6 @@ const SHORTCUTS: { label: string; combo: string }[] = [
   { label: "Shortcuts sheet", combo: "⌘ + /" },
   { label: "Close overlay", combo: "Esc" },
 ];
-
-const EXT_TO_LANG: Record<string, Language> = {
-  js: "javascript", jsx: "javascript",
-  ts: "typescript", tsx: "typescript",
-  py: "python",
-  html: "html", htm: "html",
-  css: "css",
-};
-
-const inferLang = (name: string): Language => {
-  const ext = name.split(".").pop()?.toLowerCase() ?? "";
-  return EXT_TO_LANG[ext] ?? "javascript";
-};
-
-const starterFor = (lang: Language): string => {
-  switch (lang) {
-    case "python": return "print('Hello from Syntax IDE')\n";
-    case "javascript": return "console.log('Hello from Syntax IDE');\n";
-    case "typescript": return "const greeting: string = 'Hello from Syntax IDE';\nconsole.log(greeting);\n";
-    case "html": return "<!doctype html>\n<html>\n  <body>\n    <h1>Hello Syntax IDE</h1>\n  </body>\n</html>\n";
-    case "css": return "body {\n  background: #111;\n  color: #FFB000;\n}\n";
-  }
-};
 
 export default function EditorScreen() {
   const insets = useSafeAreaInsets();
@@ -131,11 +104,6 @@ export default function EditorScreen() {
   const [recentCommands, setRecentCommands] = useState<string[]>([]);
 
   const activeFile = useMemo(() => files.find((f) => f.id === activeFileId) ?? null, [files, activeFileId]);
-
-  type QuickResult =
-    | { kind: "file"; file: FileItem; score: number }
-    | { kind: "line"; file: FileItem; line: number; text: string; score: number }
-    | { kind: "snippet"; snippet: Snippet; score: number };
 
   const quickResults = useMemo<QuickResult[]>(() => {
     const q = quickFileQuery.trim();
@@ -552,14 +520,6 @@ export default function EditorScreen() {
   });
 
   // ---- Command palette actions ----
-  type PaletteCommand = {
-    id: string;
-    label: string;
-    hint: string;
-    shortcut?: string;
-    disabled?: boolean;
-    run: () => void | Promise<void>;
-  };
 
   const commands = useMemo<PaletteCommand[]>(() => {
     const list: PaletteCommand[] = [
@@ -1411,219 +1371,30 @@ export default function EditorScreen() {
       </Modal>
 
       {/* Quick file switcher (⌘P) */}
-      <Modal
+      <QuickFileSwitcherModal
         visible={showQuickFile}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowQuickFile(false)}
-      >
-        <Pressable style={styles.modalBackdrop} onPress={() => setShowQuickFile(false)}>
-          <Pressable style={styles.quickFileCard} onPress={() => {}} testID="quick-file-modal">
-            <View style={styles.quickFileHeader}>
-              <Feather name="search" size={16} color={COLORS.onSurfaceSecondary} />
-              <TextInput
-                value={quickFileQuery}
-                onChangeText={setQuickFileQuery}
-                placeholder="Files, content, or snippets…"
-                placeholderTextColor={COLORS.onSurfaceSecondary}
-                style={styles.quickFileInput}
-                autoFocus
-                autoCapitalize="none"
-                autoCorrect={false}
-                testID="quick-file-input"
-                onKeyPress={(e) => {
-                  const k = (e.nativeEvent as { key?: string }).key ?? "";
-                  if (k === "ArrowDown") {
-                    setQuickFileIndex((i) => Math.min(i + 1, Math.max(quickResults.length - 1, 0)));
-                  } else if (k === "ArrowUp") {
-                    setQuickFileIndex((i) => Math.max(i - 1, 0));
-                  } else if (k === "Enter" || k === "Return") {
-                    const pick = quickResults[quickFileIndex];
-                    if (pick) {
-                      void openQuickResult(pick);
-                    }
-                  }
-                }}
-              />
-              <Text style={styles.quickFileCount}>{quickResults.length}</Text>
-            </View>
-            <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled">
-              {quickResults.length === 0 ? (
-                <Text style={styles.emptyMuted}>No matches</Text>
-              ) : (
-                quickResults.map((r, i) => {
-                  const isCurrent = i === quickFileIndex;
-                  const prevKind = i > 0 ? quickResults[i - 1].kind : null;
-                  const showHeader = r.kind !== prevKind;
-                  const key = r.kind === "file"
-                    ? `f-${r.file.id}`
-                    : r.kind === "line"
-                    ? `l-${r.file.id}-${r.line}`
-                    : `s-${r.snippet.id}`;
-                  const tid = r.kind === "file"
-                    ? `quick-file-row-${r.file.id}`
-                    : r.kind === "line"
-                    ? `quick-line-row-${r.file.id}-${r.line}`
-                    : `quick-snippet-row-${r.snippet.id}`;
-                  const headerLabel = r.kind === "file" ? "Files" : r.kind === "line" ? "In-file matches" : "Snippets";
-                  const recent = r.kind === "file" && isRecent(recentFiles, r.file.id);
-                  return (
-                    <View key={key}>
-                      {showHeader ? (
-                        <View style={styles.quickSectionHeader} testID={`quick-section-${r.kind}`}>
-                          <Text style={styles.quickSectionHeaderLabel}>{headerLabel}</Text>
-                        </View>
-                      ) : null}
-                      <Pressable
-                        onPress={() => openQuickResult(r)}
-                        style={[styles.quickFileRow, isCurrent && styles.quickFileRowActive]}
-                        testID={tid}
-                      >
-                        <View style={styles.quickKindBadge}>
-                          <Text style={styles.quickKindLabel}>
-                            {r.kind === "file" ? "FILE" : r.kind === "line" ? "LINE" : "SNIP"}
-                          </Text>
-                        </View>
-                        {r.kind === "file" ? (
-                          <>
-                            <View style={{ flex: 1 }}>
-                              <HighlightedText
-                                text={r.file.name}
-                                query={quickFileQuery}
-                                style={[styles.quickFileName, isCurrent && { color: COLORS.brand }]}
-                                hlColor={COLORS.brand}
-                                numberOfLines={1}
-                              />
-                            </View>
-                            {recent ? (
-                              <View style={styles.recentBadge} testID={`quick-file-row-${r.file.id}-recent`}>
-                                <Text style={styles.recentBadgeLabel}>RECENT</Text>
-                              </View>
-                            ) : null}
-                            <Text style={styles.quickFileLang}>{r.file.language}</Text>
-                          </>
-                        ) : r.kind === "line" ? (
-                          <View style={{ flex: 1, gap: 2 }}>
-                            <Text style={styles.quickLinePath} numberOfLines={1}>
-                              <Text style={[isCurrent && { color: COLORS.brand }]}>{r.file.name}</Text>
-                              <Text style={styles.quickLinePathDim}>:{r.line}</Text>
-                            </Text>
-                            <HighlightedText
-                              text={r.text.trim().slice(0, 80)}
-                              query={quickFileQuery}
-                              style={styles.quickLineSnippet}
-                              hlColor={COLORS.brand}
-                              numberOfLines={1}
-                            />
-                          </View>
-                        ) : (
-                          <View style={{ flex: 1, gap: 2 }}>
-                            <HighlightedText
-                              text={r.snippet.title}
-                              query={quickFileQuery}
-                              style={[styles.quickFileName, isCurrent && { color: COLORS.brand }]}
-                              hlColor={COLORS.brand}
-                              numberOfLines={1}
-                            />
-                            <Text style={styles.quickLineSnippet} numberOfLines={1}>
-                              by {r.snippet.author} · {r.snippet.language}
-                            </Text>
-                          </View>
-                        )}
-                      </Pressable>
-                    </View>
-                  );
-                })
-              )}
-            </ScrollView>
-          </Pressable>
-        </Pressable>
-      </Modal>
+        onClose={() => setShowQuickFile(false)}
+        query={quickFileQuery}
+        onQueryChange={setQuickFileQuery}
+        index={quickFileIndex}
+        onIndexChange={setQuickFileIndex}
+        results={quickResults}
+        recentFileIds={recentFiles}
+        onOpen={openQuickResult}
+      />
 
       {/* Command palette (⇧⌘P) */}
-      <Modal
+      <CommandPaletteModal
         visible={showCommandPalette}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowCommandPalette(false)}
-      >
-        <Pressable style={styles.modalBackdrop} onPress={() => setShowCommandPalette(false)}>
-          <Pressable style={styles.quickFileCard} onPress={() => {}} testID="command-palette-modal">
-            <View style={styles.quickFileHeader}>
-              <Feather name="terminal" size={16} color={COLORS.brand} />
-              <TextInput
-                value={commandQuery}
-                onChangeText={setCommandQuery}
-                placeholder="Run command…"
-                placeholderTextColor={COLORS.onSurfaceSecondary}
-                style={styles.quickFileInput}
-                autoFocus
-                autoCapitalize="none"
-                autoCorrect={false}
-                testID="command-palette-input"
-                onKeyPress={(e) => {
-                  const k = (e.nativeEvent as { key?: string }).key ?? "";
-                  if (k === "ArrowDown") {
-                    setCommandIndex((i) => Math.min(i + 1, Math.max(commandMatches.length - 1, 0)));
-                  } else if (k === "ArrowUp") {
-                    setCommandIndex((i) => Math.max(i - 1, 0));
-                  } else if (k === "Enter" || k === "Return") {
-                    const pick = commandMatches[commandIndex];
-                    if (pick) void runCommand(pick);
-                  }
-                }}
-              />
-              <Text style={styles.quickFileCount}>{commandMatches.length}</Text>
-            </View>
-            <ScrollView style={{ maxHeight: 400 }} keyboardShouldPersistTaps="handled">
-              {commandMatches.length === 0 ? (
-                <Text style={styles.emptyMuted}>No commands</Text>
-              ) : (
-                commandMatches.map((c, i) => {
-                  const isCurrent = i === commandIndex;
-                  const recent = isRecent(recentCommands, c.id);
-                  return (
-                    <Pressable
-                      key={c.id}
-                      onPress={() => runCommand(c)}
-                      disabled={c.disabled}
-                      style={[
-                        styles.commandRow,
-                        isCurrent && styles.quickFileRowActive,
-                        c.disabled && { opacity: 0.4 },
-                      ]}
-                      testID={`command-${c.id}`}
-                    >
-                      <View style={{ flex: 1, gap: 2 }}>
-                        <HighlightedText
-                          text={c.label}
-                          query={commandQuery}
-                          style={[styles.commandLabel, isCurrent && { color: COLORS.brand }]}
-                          hlColor={COLORS.brand}
-                          numberOfLines={1}
-                        />
-                        <Text style={styles.commandHint} numberOfLines={1}>
-                          {c.hint}
-                        </Text>
-                      </View>
-                      {recent ? (
-                        <View style={styles.recentBadge} testID={`command-${c.id}-recent`}>
-                          <Text style={styles.recentBadgeLabel}>RECENT</Text>
-                        </View>
-                      ) : null}
-                      {c.shortcut ? (
-                        <View style={styles.commandShortcut}>
-                          <Text style={styles.commandShortcutLabel}>{c.shortcut}</Text>
-                        </View>
-                      ) : null}
-                    </Pressable>
-                  );
-                })
-              )}
-            </ScrollView>
-          </Pressable>
-        </Pressable>
-      </Modal>
+        onClose={() => setShowCommandPalette(false)}
+        query={commandQuery}
+        onQueryChange={setCommandQuery}
+        index={commandIndex}
+        onIndexChange={setCommandIndex}
+        matches={commandMatches}
+        recentIds={recentCommands}
+        onRun={runCommand}
+      />
 
       {/* Language picker modal (change lang of active file) */}
       <Modal visible={showLangMenu} transparent animationType="fade" onRequestClose={() => setShowLangMenu(false)}>
@@ -1648,76 +1419,6 @@ export default function EditorScreen() {
         </Pressable>
       </Modal>
     </SafeAreaView>
-  );
-}
-
-function HighlightedText({
-  text,
-  query,
-  style,
-  hlColor,
-  numberOfLines,
-}: {
-  text: string;
-  query: string;
-  style?: React.ComponentProps<typeof Text>["style"];
-  hlColor: string;
-  numberOfLines?: number;
-}) {
-  const spans = highlightMatches(query, text);
-  return (
-    <Text style={style} numberOfLines={numberOfLines}>
-      {spans.map((s, i) =>
-        s.matched ? (
-          <Text key={i} style={{ color: hlColor, fontWeight: "700" }}>
-            {s.text}
-          </Text>
-        ) : (
-          <Text key={i}>{s.text}</Text>
-        ),
-      )}
-    </Text>
-  );
-}
-
-function PromptModal(props: {
-  visible: boolean;
-  title: string;
-  placeholder: string;
-  value: string;
-  onChange: (s: string) => void;
-  onCancel: () => void;
-  onConfirm: () => void;
-  confirmLabel: string;
-  testID?: string;
-}) {
-  return (
-    <Modal visible={props.visible} transparent animationType="fade" onRequestClose={props.onCancel}>
-      <Pressable style={styles.modalBackdrop} onPress={props.onCancel}>
-        <Pressable style={styles.modalCard} onPress={() => {}} testID={props.testID}>
-          <Text style={styles.modalTitle}>{props.title}</Text>
-          <TextInput
-            value={props.value}
-            onChangeText={props.onChange}
-            placeholder={props.placeholder}
-            placeholderTextColor={COLORS.onSurfaceSecondary}
-            style={styles.modalInput}
-            autoFocus
-            autoCapitalize="none"
-            autoCorrect={false}
-            testID="prompt-input"
-          />
-          <View style={styles.modalActions}>
-            <Pressable onPress={props.onCancel} style={styles.secondaryBtn} testID="prompt-cancel">
-              <Text style={styles.secondaryBtnLabel}>Cancel</Text>
-            </Pressable>
-            <Pressable onPress={props.onConfirm} style={styles.primaryBtn} testID="prompt-confirm">
-              <Text style={styles.primaryBtnLabel}>{props.confirmLabel}</Text>
-            </Pressable>
-          </View>
-        </Pressable>
-      </Pressable>
-    </Modal>
   );
 }
 
@@ -1816,147 +1517,6 @@ const styles = StyleSheet.create({
     fontStyle: "italic",
   },
 
-  quickFileCard: {
-    width: "100%",
-    maxWidth: 480,
-    backgroundColor: COLORS.surfaceSecondary,
-    borderRadius: RADIUS.lg,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    overflow: "hidden",
-  },
-  quickFileHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: SPACING.sm,
-    paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.md,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.divider,
-  },
-  quickFileInput: {
-    flex: 1,
-    color: COLORS.onSurface,
-    fontSize: TEXT.base,
-    padding: 0,
-  },
-  quickFileCount: {
-    color: COLORS.onSurfaceSecondary,
-    fontFamily: FONT.mono,
-    fontSize: TEXT.sm - 1,
-  },
-  quickFileRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: SPACING.sm,
-    paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.sm,
-  },
-  quickFileRowActive: {
-    backgroundColor: COLORS.brandTertiary,
-    borderLeftWidth: 2,
-    borderLeftColor: COLORS.brand,
-  },
-  quickFileName: {
-    flex: 1,
-    color: COLORS.onSurface,
-    fontFamily: FONT.mono,
-    fontSize: TEXT.sm,
-  },
-  quickFileLang: {
-    color: COLORS.onSurfaceSecondary,
-    fontFamily: FONT.mono,
-    fontSize: TEXT.sm - 2,
-    textTransform: "uppercase",
-    letterSpacing: 1,
-  },
-  quickKindBadge: {
-    width: 40,
-    paddingHorizontal: 4,
-    paddingVertical: 2,
-    borderRadius: RADIUS.sm,
-    backgroundColor: COLORS.surfaceTertiary,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    alignItems: "center",
-  },
-  quickKindLabel: {
-    color: COLORS.onSurfaceSecondary,
-    fontFamily: FONT.mono,
-    fontSize: 9,
-    fontWeight: "700",
-    letterSpacing: 1,
-  },
-  quickLinePath: {
-    fontFamily: FONT.mono,
-    fontSize: TEXT.sm,
-    color: COLORS.onSurface,
-  },
-  quickLinePathDim: {
-    color: COLORS.onSurfaceSecondary,
-  },
-  quickLineSnippet: {
-    fontFamily: FONT.mono,
-    fontSize: TEXT.sm - 1,
-    color: COLORS.onSurfaceSecondary,
-  },
-  commandRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: SPACING.md,
-    paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.md,
-  },
-  commandLabel: {
-    color: COLORS.onSurface,
-    fontSize: TEXT.base,
-    fontWeight: "600",
-  },
-  commandHint: {
-    color: COLORS.onSurfaceSecondary,
-    fontSize: TEXT.sm - 1,
-  },
-  commandShortcut: {
-    paddingHorizontal: SPACING.sm,
-    paddingVertical: 3,
-    borderRadius: RADIUS.sm,
-    backgroundColor: COLORS.surfaceTertiary,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  commandShortcutLabel: {
-    color: COLORS.onSurfaceSecondary,
-    fontFamily: FONT.mono,
-    fontSize: TEXT.sm - 1,
-    fontWeight: "600",
-  },
-  recentBadge: {
-    paddingHorizontal: SPACING.sm,
-    paddingVertical: 2,
-    borderRadius: RADIUS.sm,
-    backgroundColor: COLORS.brandTertiary,
-    borderWidth: 1,
-    borderColor: COLORS.brand,
-  },
-  recentBadgeLabel: {
-    color: COLORS.brand,
-    fontFamily: FONT.mono,
-    fontSize: 9,
-    fontWeight: "700",
-    letterSpacing: 1,
-  },
-  quickSectionHeader: {
-    paddingHorizontal: SPACING.md,
-    paddingTop: SPACING.sm,
-    paddingBottom: 4,
-  },
-  quickSectionHeaderLabel: {
-    color: COLORS.onSurfaceSecondary,
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 1.5,
-    textTransform: "uppercase",
-  },
   filename: {
     color: COLORS.onSurface,
     fontFamily: FONT.mono,
