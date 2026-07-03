@@ -119,7 +119,8 @@ export default function AiScreen() {
   const insertIntoEditor = async (text: string) => {
     await AsyncStorage.setItem("syntax.pending_insert", text);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    router.back();
+    if (router.canGoBack()) router.back();
+    else router.replace("/");
   };
 
   return (

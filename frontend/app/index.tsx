@@ -229,6 +229,24 @@ export default function EditorScreen() {
   // When returning from AI screen or Snippets, apply any pending "insert at cursor" payload
   // after the file has finished loading (avoid the load overwriting our insertion).
   const pendingInsertRef = useRef<string | null>(null);
+  const loadingRef = useRef<boolean>(true);
+  const activeFileIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+  useEffect(() => {
+    activeFileIdRef.current = activeFileId;
+  }, [activeFileId]);
+
+  const tryApplyPending = useCallback(() => {
+    const pending = pendingInsertRef.current;
+    if (!pending) return;
+    if (loadingRef.current) return;
+    if (!activeFileIdRef.current) return;
+    pendingInsertRef.current = null;
+    insertAtCursor(pending);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -238,22 +256,19 @@ export default function EditorScreen() {
         if (!cancelled && pending) {
           await AsyncStorage.removeItem("syntax.pending_insert");
           pendingInsertRef.current = pending;
+          // Fires immediately if the file is already loaded (returning from a pushed screen).
+          tryApplyPending();
         }
       })();
       return () => {
         cancelled = true;
       };
-    }, []),
+    }, [tryApplyPending]),
   );
 
   useEffect(() => {
-    if (loading) return;
-    if (!activeFile) return;
-    const pending = pendingInsertRef.current;
-    if (!pending) return;
-    pendingInsertRef.current = null;
-    insertAtCursor(pending);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    // Also try when initial load completes for the first time.
+    tryApplyPending();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, activeFileId]);
 

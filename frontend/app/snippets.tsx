@@ -51,6 +51,7 @@ export default function SnippetsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [langFilter, setLangFilter] = useState<Language | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [scope, setScope] = useState<"all" | "mine">("all");
   const [deviceId, setDeviceId] = useState<string>("");
   const [starred, setStarred] = useState<Record<string, boolean>>({});
 
@@ -110,7 +111,27 @@ export default function SnippetsScreen() {
   const insertIntoEditor = async (s: Snippet) => {
     await AsyncStorage.setItem("syntax.pending_insert", s.code);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    router.replace("/");
+    if (router.canGoBack()) router.back();
+    else router.replace("/");
+  };
+
+  const visibleSnippets = useMemo(() => {
+    if (scope === "mine" && deviceId) {
+      return snippets.filter((s) => s.author_device === deviceId);
+    }
+    return snippets;
+  }, [snippets, scope, deviceId]);
+
+  const deleteMine = async (s: Snippet) => {
+    if (!deviceId || s.author_device !== deviceId) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    try {
+      await api.deleteSnippet(s.id, deviceId);
+      setSnippets((prev) => prev.filter((x) => x.id !== s.id));
+      if (selected?.id === s.id) setSelected(null);
+    } catch {
+      // Silent ignore; backend guards prevent unauthorized deletes.
+    }
   };
 
   const filteredNote = useMemo(
@@ -126,7 +147,7 @@ export default function SnippetsScreen() {
         </Pressable>
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>Snippets</Text>
-          <Text style={styles.subtitle}>{filteredNote} • {snippets.length}</Text>
+          <Text style={styles.subtitle}>{filteredNote} • {visibleSnippets.length}</Text>
         </View>
         <Pressable onPress={() => setShowPublish(true)} style={styles.publishBtn} testID="open-publish-btn">
           <Feather name="upload" size={14} color={COLORS.onBrand} />
@@ -154,6 +175,24 @@ export default function SnippetsScreen() {
         ) : null}
       </View>
 
+      {/* All / Mine segmented control */}
+      <View style={styles.segmentWrap}>
+        <Pressable
+          onPress={() => setScope("all")}
+          style={[styles.segment, scope === "all" && styles.segmentActive]}
+          testID="scope-all"
+        >
+          <Text style={[styles.segmentLabel, scope === "all" && { color: COLORS.brand }]}>All</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => setScope("mine")}
+          style={[styles.segment, scope === "mine" && styles.segmentActive]}
+          testID="scope-mine"
+        >
+          <Text style={[styles.segmentLabel, scope === "mine" && { color: COLORS.brand }]}>Mine</Text>
+        </Pressable>
+      </View>
+
       {/* Language filter chips — chrome, single horizontal scroller */}
       <ScrollView
         horizontal
@@ -177,18 +216,18 @@ export default function SnippetsScreen() {
         <View style={styles.centerFill}>
           <ActivityIndicator color={COLORS.brand} />
         </View>
-      ) : snippets.length === 0 ? (
+      ) : visibleSnippets.length === 0 ? (
         <View style={styles.centerFill}>
-          <Feather name="package" size={40} color={COLORS.brand} />
-          <Text style={styles.emptyTitle}>No snippets yet</Text>
-          <Text style={styles.emptySub}>Be the first to publish one.</Text>
+          <Feather name={scope === "mine" ? "user" : "package"} size={40} color={COLORS.brand} />
+          <Text style={styles.emptyTitle}>{scope === "mine" ? "You haven't published anything yet" : "No snippets yet"}</Text>
+          <Text style={styles.emptySub}>{scope === "mine" ? "Publish a snippet to see it here." : "Be the first to publish one."}</Text>
           <Pressable onPress={() => setShowPublish(true)} style={styles.primaryBtn} testID="empty-publish-cta">
             <Text style={styles.primaryBtnLabel}>Publish a snippet</Text>
           </Pressable>
         </View>
       ) : (
         <FlatList
-          data={snippets}
+          data={visibleSnippets}
           keyExtractor={(s) => s.id}
           contentContainerStyle={styles.listContent}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.brand} />}
@@ -196,9 +235,11 @@ export default function SnippetsScreen() {
             <SnippetCard
               snippet={item}
               starred={!!starred[item.id]}
+              isMine={!!deviceId && item.author_device === deviceId}
               onOpen={() => setSelected(item)}
               onStar={() => toggleStar(item)}
               onInsert={() => insertIntoEditor(item)}
+              onDelete={() => deleteMine(item)}
             />
           )}
           testID="snippets-list"
@@ -249,15 +290,19 @@ function FilterChip({
 function SnippetCard({
   snippet,
   starred,
+  isMine,
   onOpen,
   onStar,
   onInsert,
+  onDelete,
 }: {
   snippet: Snippet;
   starred: boolean;
+  isMine: boolean;
   onOpen: () => void;
   onStar: () => void;
   onInsert: () => void;
+  onDelete: () => void;
 }) {
   const preview = snippet.code.split("\n").slice(0, 4);
   return (
@@ -265,11 +310,18 @@ function SnippetCard({
       <View style={styles.cardHeader}>
         <View style={{ flex: 1 }}>
           <Text style={styles.cardTitle} numberOfLines={1}>{snippet.title}</Text>
-          <Text style={styles.cardAuthor} numberOfLines={1}>by {snippet.author}</Text>
+          <Text style={styles.cardAuthor} numberOfLines={1}>
+            by {snippet.author}{isMine ? " (you)" : ""}
+          </Text>
         </View>
         <View style={styles.langBadge}>
           <Text style={styles.langBadgeLabel}>{snippet.language}</Text>
         </View>
+        {isMine ? (
+          <Pressable onPress={onDelete} hitSlop={6} style={styles.deleteBtn} testID={`delete-mine-${snippet.id}`}>
+            <Feather name="trash-2" size={14} color={COLORS.error} />
+          </Pressable>
+        ) : null}
       </View>
       {snippet.description ? (
         <Text style={styles.cardDesc} numberOfLines={2}>{snippet.description}</Text>
@@ -628,6 +680,41 @@ const styles = StyleSheet.create({
     color: COLORS.onSurface,
     fontSize: TEXT.sm,
     padding: 0,
+  },
+
+  segmentWrap: {
+    flexDirection: "row",
+    marginHorizontal: SPACING.md,
+    marginTop: SPACING.md,
+    padding: 3,
+    backgroundColor: COLORS.surfaceSecondary,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  segment: {
+    flex: 1,
+    paddingVertical: SPACING.sm,
+    alignItems: "center",
+    borderRadius: RADIUS.sm,
+  },
+  segmentActive: {
+    backgroundColor: COLORS.brandTertiary,
+  },
+  segmentLabel: {
+    color: COLORS.onSurface,
+    fontSize: TEXT.sm,
+    fontWeight: "700",
+    letterSpacing: 1,
+    textTransform: "uppercase",
+  },
+
+  deleteBtn: {
+    padding: SPACING.xs,
+    borderRadius: RADIUS.sm,
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
 
   chipRow: {
