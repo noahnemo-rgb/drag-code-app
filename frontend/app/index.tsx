@@ -29,7 +29,7 @@ import { FileItem, Language, Project, Snippet } from "@/src/lib/api";
 import { highlightLine, PALETTE } from "@/src/lib/highlight";
 import { store } from "@/src/lib/store";
 import { settings, SyncMode } from "@/src/lib/storage";
-import { fuzzyScore } from "@/src/lib/fuzzy";
+import { fuzzyScore, highlightMatches } from "@/src/lib/fuzzy";
 import { useEditorShortcuts } from "@/src/hooks/use-editor-shortcuts";
 import { COLORS, FONT, RADIUS, SPACING, TEXT } from "@/src/theme";
 
@@ -53,6 +53,7 @@ const SHORTCUTS: { label: string; combo: string }[] = [
   { label: "Run", combo: "⌘ + Enter" },
   { label: "AI assistant", combo: "⌘ + K" },
   { label: "Quick file switcher", combo: "⌘ + P" },
+  { label: "Command palette", combo: "⇧ + ⌘ + P" },
   { label: "Shortcuts sheet", combo: "⌘ + /" },
   { label: "Close overlay", combo: "Esc" },
 ];
@@ -120,6 +121,9 @@ export default function EditorScreen() {
   const [quickFileQuery, setQuickFileQuery] = useState("");
   const [quickFileIndex, setQuickFileIndex] = useState(0);
   const [snippetsCache, setSnippetsCache] = useState<Snippet[]>([]);
+  const [showCommandPalette, setShowCommandPalette] = useState(false);
+  const [commandQuery, setCommandQuery] = useState("");
+  const [commandIndex, setCommandIndex] = useState(0);
 
   const activeFile = useMemo(() => files.find((f) => f.id === activeFileId) ?? null, [files, activeFileId]);
 
@@ -488,7 +492,8 @@ export default function EditorScreen() {
       void runCurrent();
     },
     onEscape: () => {
-      if (showQuickFile) setShowQuickFile(false);
+      if (showCommandPalette) setShowCommandPalette(false);
+      else if (showQuickFile) setShowQuickFile(false);
       else if (showShortcuts) setShowShortcuts(false);
       else if (findOpen) closeFind();
       else if (showLangMenu) setShowLangMenu(false);
@@ -503,7 +508,153 @@ export default function EditorScreen() {
       setQuickFileIndex(0);
       setShowQuickFile(true);
     },
+    onCommandPalette: () => {
+      setCommandQuery("");
+      setCommandIndex(0);
+      setShowCommandPalette(true);
+    },
   });
+
+  // ---- Command palette actions ----
+  type PaletteCommand = {
+    id: string;
+    label: string;
+    hint: string;
+    shortcut?: string;
+    disabled?: boolean;
+    run: () => void | Promise<void>;
+  };
+
+  const commands = useMemo<PaletteCommand[]>(() => {
+    const list: PaletteCommand[] = [
+      {
+        id: "run",
+        label: "Run current file",
+        hint: "Execute the active file",
+        shortcut: "⌘ Enter",
+        disabled: !activeFile,
+        run: () => void runCurrent(),
+      },
+      {
+        id: "save",
+        label: "Save current file",
+        hint: "Flush edits + confirm",
+        shortcut: "⌘ S",
+        disabled: !activeFile,
+        run: async () => {
+          if (!activeFile) return;
+          if (content !== savedContent) {
+            await store.updateFile(syncMode, activeFile.id, { content });
+            setSavedContent(content);
+          }
+          setSavedToast(true);
+          setTimeout(() => setSavedToast(false), 1200);
+        },
+      },
+      {
+        id: "find",
+        label: "Find in file",
+        hint: "Open Find & Replace",
+        shortcut: "⌘ F",
+        run: () => setFindOpen(true),
+      },
+      {
+        id: "quickfile",
+        label: "Quick file switcher",
+        hint: "Files, content, snippets",
+        shortcut: "⌘ P",
+        run: () => {
+          setQuickFileQuery("");
+          setQuickFileIndex(0);
+          setShowQuickFile(true);
+        },
+      },
+      {
+        id: "ai",
+        label: "Open AI assistant",
+        hint: "Chat with Gemini",
+        shortcut: "⌘ K",
+        run: () => router.push("/ai"),
+      },
+      {
+        id: "snippets",
+        label: "Open Snippets marketplace",
+        hint: "Browse / publish snippets",
+        run: () => router.push("/snippets"),
+      },
+      {
+        id: "toggle-sync",
+        label: syncMode === "cloud" ? "Switch to local storage" : "Switch to cloud storage",
+        hint: `Currently: ${syncMode}`,
+        run: () => switchMode(syncMode === "cloud" ? "local" : "cloud"),
+      },
+      {
+        id: "new-file",
+        label: "New file…",
+        hint: "Create a file in the current project",
+        disabled: !activeProjectId,
+        run: () => setShowNewFile(true),
+      },
+      {
+        id: "new-project",
+        label: "New project…",
+        hint: "Create a new project",
+        run: () => setShowNewProject(true),
+      },
+      {
+        id: "delete-file",
+        label: "Delete current file",
+        hint: activeFile ? `Remove ${activeFile.name}` : "No file open",
+        disabled: !activeFile,
+        run: async () => {
+          if (activeFile) await doDeleteFile(activeFile.id);
+        },
+      },
+      {
+        id: "bt",
+        label: "Connect Bluetooth keyboard",
+        hint: "Open OS pairing screen",
+        run: () => void openBluetoothSettings(),
+      },
+      {
+        id: "shortcuts",
+        label: "Show keyboard shortcuts",
+        hint: "Cheat sheet",
+        shortcut: "⌘ /",
+        run: () => setShowShortcuts(true),
+      },
+    ];
+    return list;
+  }, [
+    activeFile,
+    activeProjectId,
+    content,
+    savedContent,
+    syncMode,
+    // Handlers referenced above are stable within a render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ]);
+
+  const commandMatches = useMemo(() => {
+    const q = commandQuery.trim();
+    if (!q) return commands;
+    return commands
+      .map((c) => ({ c, s: fuzzyScore(q, `${c.label} ${c.hint}`) }))
+      .filter((x) => x.s >= 0)
+      .sort((a, b) => b.s - a.s)
+      .map((x) => x.c);
+  }, [commands, commandQuery]);
+
+  useEffect(() => {
+    setCommandIndex(0);
+  }, [commandQuery]);
+
+  const runCommand = async (c: PaletteCommand) => {
+    if (c.disabled) return;
+    setShowCommandPalette(false);
+    Haptics.selectionAsync();
+    await c.run();
+  };
 
   const doCreateFile = async () => {
     if (!activeProjectId) return;
@@ -1253,12 +1404,15 @@ export default function EditorScreen() {
                       </View>
                       {r.kind === "file" ? (
                         <>
-                          <Text
-                            style={[styles.quickFileName, isCurrent && { color: COLORS.brand }]}
-                            numberOfLines={1}
-                          >
-                            {r.file.name}
-                          </Text>
+                          <View style={{ flex: 1 }}>
+                            <HighlightedText
+                              text={r.file.name}
+                              query={quickFileQuery}
+                              style={[styles.quickFileName, isCurrent && { color: COLORS.brand }]}
+                              hlColor={COLORS.brand}
+                              numberOfLines={1}
+                            />
+                          </View>
                           <Text style={styles.quickFileLang}>{r.file.language}</Text>
                         </>
                       ) : r.kind === "line" ? (
@@ -1267,23 +1421,107 @@ export default function EditorScreen() {
                             <Text style={[isCurrent && { color: COLORS.brand }]}>{r.file.name}</Text>
                             <Text style={styles.quickLinePathDim}>:{r.line}</Text>
                           </Text>
-                          <Text style={styles.quickLineSnippet} numberOfLines={1}>
-                            {r.text.trim().slice(0, 80)}
-                          </Text>
+                          <HighlightedText
+                            text={r.text.trim().slice(0, 80)}
+                            query={quickFileQuery}
+                            style={styles.quickLineSnippet}
+                            hlColor={COLORS.brand}
+                            numberOfLines={1}
+                          />
                         </View>
                       ) : (
                         <View style={{ flex: 1, gap: 2 }}>
-                          <Text
+                          <HighlightedText
+                            text={r.snippet.title}
+                            query={quickFileQuery}
                             style={[styles.quickFileName, isCurrent && { color: COLORS.brand }]}
+                            hlColor={COLORS.brand}
                             numberOfLines={1}
-                          >
-                            {r.snippet.title}
-                          </Text>
+                          />
                           <Text style={styles.quickLineSnippet} numberOfLines={1}>
                             by {r.snippet.author} · {r.snippet.language}
                           </Text>
                         </View>
                       )}
+                    </Pressable>
+                  );
+                })
+              )}
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Command palette (⇧⌘P) */}
+      <Modal
+        visible={showCommandPalette}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowCommandPalette(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setShowCommandPalette(false)}>
+          <Pressable style={styles.quickFileCard} onPress={() => {}} testID="command-palette-modal">
+            <View style={styles.quickFileHeader}>
+              <Feather name="terminal" size={16} color={COLORS.brand} />
+              <TextInput
+                value={commandQuery}
+                onChangeText={setCommandQuery}
+                placeholder="Run command…"
+                placeholderTextColor={COLORS.onSurfaceSecondary}
+                style={styles.quickFileInput}
+                autoFocus
+                autoCapitalize="none"
+                autoCorrect={false}
+                testID="command-palette-input"
+                onKeyPress={(e) => {
+                  const k = (e.nativeEvent as { key?: string }).key ?? "";
+                  if (k === "ArrowDown") {
+                    setCommandIndex((i) => Math.min(i + 1, Math.max(commandMatches.length - 1, 0)));
+                  } else if (k === "ArrowUp") {
+                    setCommandIndex((i) => Math.max(i - 1, 0));
+                  } else if (k === "Enter" || k === "Return") {
+                    const pick = commandMatches[commandIndex];
+                    if (pick) void runCommand(pick);
+                  }
+                }}
+              />
+              <Text style={styles.quickFileCount}>{commandMatches.length}</Text>
+            </View>
+            <ScrollView style={{ maxHeight: 400 }} keyboardShouldPersistTaps="handled">
+              {commandMatches.length === 0 ? (
+                <Text style={styles.emptyMuted}>No commands</Text>
+              ) : (
+                commandMatches.map((c, i) => {
+                  const isCurrent = i === commandIndex;
+                  return (
+                    <Pressable
+                      key={c.id}
+                      onPress={() => runCommand(c)}
+                      disabled={c.disabled}
+                      style={[
+                        styles.commandRow,
+                        isCurrent && styles.quickFileRowActive,
+                        c.disabled && { opacity: 0.4 },
+                      ]}
+                      testID={`command-${c.id}`}
+                    >
+                      <View style={{ flex: 1, gap: 2 }}>
+                        <HighlightedText
+                          text={c.label}
+                          query={commandQuery}
+                          style={[styles.commandLabel, isCurrent && { color: COLORS.brand }]}
+                          hlColor={COLORS.brand}
+                          numberOfLines={1}
+                        />
+                        <Text style={styles.commandHint} numberOfLines={1}>
+                          {c.hint}
+                        </Text>
+                      </View>
+                      {c.shortcut ? (
+                        <View style={styles.commandShortcut}>
+                          <Text style={styles.commandShortcutLabel}>{c.shortcut}</Text>
+                        </View>
+                      ) : null}
                     </Pressable>
                   );
                 })
@@ -1316,6 +1554,35 @@ export default function EditorScreen() {
         </Pressable>
       </Modal>
     </SafeAreaView>
+  );
+}
+
+function HighlightedText({
+  text,
+  query,
+  style,
+  hlColor,
+  numberOfLines,
+}: {
+  text: string;
+  query: string;
+  style?: React.ComponentProps<typeof Text>["style"];
+  hlColor: string;
+  numberOfLines?: number;
+}) {
+  const spans = highlightMatches(query, text);
+  return (
+    <Text style={style} numberOfLines={numberOfLines}>
+      {spans.map((s, i) =>
+        s.matched ? (
+          <Text key={i} style={{ color: hlColor, fontWeight: "700" }}>
+            {s.text}
+          </Text>
+        ) : (
+          <Text key={i}>{s.text}</Text>
+        ),
+      )}
+    </Text>
   );
 }
 
@@ -1538,6 +1805,36 @@ const styles = StyleSheet.create({
     fontFamily: FONT.mono,
     fontSize: TEXT.sm - 1,
     color: COLORS.onSurfaceSecondary,
+  },
+  commandRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SPACING.md,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.md,
+  },
+  commandLabel: {
+    color: COLORS.onSurface,
+    fontSize: TEXT.base,
+    fontWeight: "600",
+  },
+  commandHint: {
+    color: COLORS.onSurfaceSecondary,
+    fontSize: TEXT.sm - 1,
+  },
+  commandShortcut: {
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 3,
+    borderRadius: RADIUS.sm,
+    backgroundColor: COLORS.surfaceTertiary,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  commandShortcutLabel: {
+    color: COLORS.onSurfaceSecondary,
+    fontFamily: FONT.mono,
+    fontSize: TEXT.sm - 1,
+    fontWeight: "600",
   },
   filename: {
     color: COLORS.onSurface,

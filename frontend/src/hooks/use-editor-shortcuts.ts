@@ -21,6 +21,7 @@ export interface EditorShortcutHandlers {
   onAi?: () => void;
   onShortcuts?: () => void;
   onQuickFile?: () => void;
+  onCommandPalette?: () => void;
 }
 
 export function useEditorShortcuts(handlers: EditorShortcutHandlers): boolean {
@@ -76,6 +77,12 @@ export function useEditorShortcuts(handlers: EditorShortcutHandlers): boolean {
       if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
         handlers.onQuickFile?.();
+        return;
+      }
+      // Cmd/Ctrl + Shift + P → command palette
+      if (mod && e.shiftKey && !e.altKey && e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        handlers.onCommandPalette?.();
         return;
       }
       // Cmd/Ctrl + / → shortcuts cheat-sheet
