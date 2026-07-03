@@ -19,6 +19,8 @@ export interface EditorShortcutHandlers {
   onRun: () => void;
   onEscape: () => void;
   onAi?: () => void;
+  onShortcuts?: () => void;
+  onQuickFile?: () => void;
 }
 
 export function useEditorShortcuts(handlers: EditorShortcutHandlers): boolean {
@@ -68,6 +70,18 @@ export function useEditorShortcuts(handlers: EditorShortcutHandlers): boolean {
       if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
         e.preventDefault();
         handlers.onAi?.();
+        return;
+      }
+      // Cmd/Ctrl + P → quick file switcher
+      if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        handlers.onQuickFile?.();
+        return;
+      }
+      // Cmd/Ctrl + / → shortcuts cheat-sheet
+      if (mod && !e.shiftKey && !e.altKey && e.key === "/") {
+        e.preventDefault();
+        handlers.onShortcuts?.();
         return;
       }
       // Escape → close find bar / dismiss modals

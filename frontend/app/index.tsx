@@ -29,6 +29,7 @@ import { FileItem, Language, Project } from "@/src/lib/api";
 import { highlightLine, PALETTE } from "@/src/lib/highlight";
 import { store } from "@/src/lib/store";
 import { settings, SyncMode } from "@/src/lib/storage";
+import { fuzzyFilter } from "@/src/lib/fuzzy";
 import { useEditorShortcuts } from "@/src/hooks/use-editor-shortcuts";
 import { COLORS, FONT, RADIUS, SPACING, TEXT } from "@/src/theme";
 
@@ -45,6 +46,16 @@ const LANGS: { key: Language; label: string; ext: string }[] = [
 ];
 
 const SYMBOLS = ["{", "}", "(", ")", "[", "]", "<", ">", ";", ":", "=", "+", "-", "*", "/", "\"", "'", "`", ",", ".", "!", "?", "&", "|", "#", "$", "@", "%"];
+
+const SHORTCUTS: { label: string; combo: string }[] = [
+  { label: "Find in file", combo: "⌘ + F" },
+  { label: "Save", combo: "⌘ + S" },
+  { label: "Run", combo: "⌘ + Enter" },
+  { label: "AI assistant", combo: "⌘ + K" },
+  { label: "Quick file switcher", combo: "⌘ + P" },
+  { label: "Shortcuts sheet", combo: "⌘ + /" },
+  { label: "Close overlay", combo: "Esc" },
+];
 
 const EXT_TO_LANG: Record<string, Language> = {
   js: "javascript", jsx: "javascript",
@@ -104,8 +115,21 @@ export default function EditorScreen() {
   const [showLangMenu, setShowLangMenu] = useState(false);
   const [showBtInfo, setShowBtInfo] = useState(false);
   const [savedToast, setSavedToast] = useState<boolean>(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showQuickFile, setShowQuickFile] = useState(false);
+  const [quickFileQuery, setQuickFileQuery] = useState("");
+  const [quickFileIndex, setQuickFileIndex] = useState(0);
 
   const activeFile = useMemo(() => files.find((f) => f.id === activeFileId) ?? null, [files, activeFileId]);
+
+  const quickFileMatches = useMemo(
+    () => fuzzyFilter(quickFileQuery, files, (f) => f.name).slice(0, 30),
+    [files, quickFileQuery],
+  );
+
+  useEffect(() => {
+    setQuickFileIndex(0);
+  }, [quickFileQuery]);
 
   // Load projects & restore state on mount
   useEffect(() => {
@@ -363,13 +387,21 @@ export default function EditorScreen() {
       void runCurrent();
     },
     onEscape: () => {
-      if (findOpen) closeFind();
+      if (showQuickFile) setShowQuickFile(false);
+      else if (showShortcuts) setShowShortcuts(false);
+      else if (findOpen) closeFind();
       else if (showLangMenu) setShowLangMenu(false);
       else if (showNewFile) setShowNewFile(false);
       else if (showNewProject) setShowNewProject(false);
       else if (showBtInfo) setShowBtInfo(false);
     },
     onAi: () => router.push("/ai"),
+    onShortcuts: () => setShowShortcuts(true),
+    onQuickFile: () => {
+      setQuickFileQuery("");
+      setQuickFileIndex(0);
+      setShowQuickFile(true);
+    },
   });
 
   const doCreateFile = async () => {
@@ -1016,6 +1048,120 @@ export default function EditorScreen() {
         </Pressable>
       </Modal>
 
+      {/* Shortcuts cheat-sheet (⌘/) */}
+      <Modal
+        visible={showShortcuts}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowShortcuts(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setShowShortcuts(false)}>
+          <Pressable style={styles.modalCard} onPress={() => {}} testID="shortcuts-modal">
+            <View style={{ flexDirection: "row", alignItems: "center", gap: SPACING.sm }}>
+              <Feather name="command" size={22} color={COLORS.brand} />
+              <Text style={styles.modalTitle}>Keyboard shortcuts</Text>
+            </View>
+            <View style={{ gap: SPACING.sm }}>
+              {SHORTCUTS.map((s) => (
+                <View key={s.combo} style={styles.shortcutRow}>
+                  <Text style={styles.shortcutLabel}>{s.label}</Text>
+                  <View style={styles.shortcutKeys}>
+                    {s.combo.split("+").map((k, i) => (
+                      <View key={i} style={styles.kbdKey}>
+                        <Text style={styles.kbdKeyLabel}>{k.trim()}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              ))}
+            </View>
+            <Text style={styles.shortcutHint}>Tip: On Windows / Linux, use Ctrl instead of ⌘.</Text>
+            <View style={styles.modalActions}>
+              <Pressable onPress={() => setShowShortcuts(false)} style={styles.primaryBtn} testID="close-shortcuts-btn">
+                <Text style={styles.primaryBtnLabel}>Close</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Quick file switcher (⌘P) */}
+      <Modal
+        visible={showQuickFile}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowQuickFile(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setShowQuickFile(false)}>
+          <Pressable style={styles.quickFileCard} onPress={() => {}} testID="quick-file-modal">
+            <View style={styles.quickFileHeader}>
+              <Feather name="search" size={16} color={COLORS.onSurfaceSecondary} />
+              <TextInput
+                value={quickFileQuery}
+                onChangeText={setQuickFileQuery}
+                placeholder="Type to filter files…"
+                placeholderTextColor={COLORS.onSurfaceSecondary}
+                style={styles.quickFileInput}
+                autoFocus
+                autoCapitalize="none"
+                autoCorrect={false}
+                testID="quick-file-input"
+                onKeyPress={(e) => {
+                  const k = (e.nativeEvent as { key?: string }).key ?? "";
+                  if (k === "ArrowDown") {
+                    setQuickFileIndex((i) => Math.min(i + 1, Math.max(quickFileMatches.length - 1, 0)));
+                  } else if (k === "ArrowUp") {
+                    setQuickFileIndex((i) => Math.max(i - 1, 0));
+                  } else if (k === "Enter" || k === "Return") {
+                    const pick = quickFileMatches[quickFileIndex];
+                    if (pick) {
+                      setShowQuickFile(false);
+                      void selectFile(pick.id);
+                    }
+                  }
+                }}
+              />
+              <Text style={styles.quickFileCount}>
+                {quickFileMatches.length}/{files.length}
+              </Text>
+            </View>
+            <ScrollView style={{ maxHeight: 320 }} keyboardShouldPersistTaps="handled">
+              {quickFileMatches.length === 0 ? (
+                <Text style={styles.emptyMuted}>No matches</Text>
+              ) : (
+                quickFileMatches.map((f, i) => {
+                  const isCurrent = i === quickFileIndex;
+                  return (
+                    <Pressable
+                      key={f.id}
+                      onPress={() => {
+                        setShowQuickFile(false);
+                        void selectFile(f.id);
+                      }}
+                      style={[styles.quickFileRow, isCurrent && styles.quickFileRowActive]}
+                      testID={`quick-file-row-${f.id}`}
+                    >
+                      <Feather
+                        name="file"
+                        size={13}
+                        color={isCurrent ? COLORS.brand : COLORS.onSurfaceSecondary}
+                      />
+                      <Text
+                        style={[styles.quickFileName, isCurrent && { color: COLORS.brand }]}
+                        numberOfLines={1}
+                      >
+                        {f.name}
+                      </Text>
+                      <Text style={styles.quickFileLang}>{f.language}</Text>
+                    </Pressable>
+                  );
+                })
+              )}
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       {/* Language picker modal (change lang of active file) */}
       <Modal visible={showLangMenu} transparent animationType="fade" onRequestClose={() => setShowLangMenu(false)}>
         <Pressable style={styles.modalBackdrop} onPress={() => setShowLangMenu(false)}>
@@ -1140,6 +1286,98 @@ const styles = StyleSheet.create({
     zIndex: 20,
   },
   savedToastLabel: { color: COLORS.onBrand, fontWeight: "700", fontSize: TEXT.sm },
+
+  shortcutRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 6,
+  },
+  shortcutLabel: {
+    color: COLORS.onSurface,
+    fontSize: TEXT.base,
+  },
+  shortcutKeys: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SPACING.xs,
+  },
+  kbdKey: {
+    minWidth: 24,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: RADIUS.sm,
+    backgroundColor: COLORS.surfaceTertiary,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    alignItems: "center",
+  },
+  kbdKeyLabel: {
+    color: COLORS.onSurface,
+    fontFamily: FONT.mono,
+    fontSize: TEXT.sm - 1,
+    fontWeight: "600",
+  },
+  shortcutHint: {
+    color: COLORS.onSurfaceSecondary,
+    fontSize: TEXT.sm,
+    fontStyle: "italic",
+  },
+
+  quickFileCard: {
+    width: "100%",
+    maxWidth: 480,
+    backgroundColor: COLORS.surfaceSecondary,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    overflow: "hidden",
+  },
+  quickFileHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SPACING.sm,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.md,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.divider,
+  },
+  quickFileInput: {
+    flex: 1,
+    color: COLORS.onSurface,
+    fontSize: TEXT.base,
+    padding: 0,
+  },
+  quickFileCount: {
+    color: COLORS.onSurfaceSecondary,
+    fontFamily: FONT.mono,
+    fontSize: TEXT.sm - 1,
+  },
+  quickFileRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SPACING.sm,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+  },
+  quickFileRowActive: {
+    backgroundColor: COLORS.brandTertiary,
+    borderLeftWidth: 2,
+    borderLeftColor: COLORS.brand,
+  },
+  quickFileName: {
+    flex: 1,
+    color: COLORS.onSurface,
+    fontFamily: FONT.mono,
+    fontSize: TEXT.sm,
+  },
+  quickFileLang: {
+    color: COLORS.onSurfaceSecondary,
+    fontFamily: FONT.mono,
+    fontSize: TEXT.sm - 2,
+    textTransform: "uppercase",
+    letterSpacing: 1,
+  },
   filename: {
     color: COLORS.onSurface,
     fontFamily: FONT.mono,
