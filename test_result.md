@@ -251,3 +251,11 @@ agent_communication:
           - Long-press on filename-lang-picker opens command-palette-modal; 'command-push' entry opens push-modal.
           - Share tab on web now shows the green clipboard fallback message ('Copied hello.py to clipboard — the Web Share API is unavailable in this browser.') and actually calls navigator.clipboard.writeText with the file content.
         No new issues. retest_needed=false.
+    - agent: "main"
+      message: |
+        Iteration 8 (palette polish): Two new palette enhancements added.
+          (A) RECENT badge on MRU-boosted rows in the Command Palette AND on file rows in the Quick File Switcher — capped to top 5 by new isRecent() helper in src/lib/mru.ts.
+          (B) Quick File Switcher results are now grouped by kind (Files → In-file matches → Snippets) with non-interactive section headers.
+    - agent: "testing"
+      message: |
+        Iteration 8: 8/8 checks PASSED. Empty MRU → 0 badges. Top-5 cap validated. Section headers render in the correct order and keyboard nav skips them naturally. Snippet section code path reviewed but not exercised live (no matching snippet in the default project — future improvement). retest_needed=false.
