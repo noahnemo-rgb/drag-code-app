@@ -8,6 +8,7 @@ import {
   Animated,
   Dimensions,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   NativeSyntheticEvent,
   Platform,
@@ -100,6 +101,7 @@ export default function EditorScreen() {
   const [newFileLang, setNewFileLang] = useState<Language>("javascript");
   const [newProjectName, setNewProjectName] = useState("");
   const [showLangMenu, setShowLangMenu] = useState(false);
+  const [showBtInfo, setShowBtInfo] = useState(false);
 
   const activeFile = useMemo(() => files.find((f) => f.id === activeFileId) ?? null, [files, activeFileId]);
 
@@ -281,6 +283,28 @@ export default function EditorScreen() {
     await AsyncStorage.setItem("syntax.pending_prompt", prompt);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.push("/ai");
+  };
+
+  const openBluetoothSettings = async () => {
+    Haptics.selectionAsync();
+    try {
+      if (Platform.OS === "android") {
+        // Direct deep-link to the Android system Bluetooth settings screen.
+        await Linking.sendIntent("android.settings.BLUETOOTH_SETTINGS");
+        return;
+      }
+      if (Platform.OS === "ios") {
+        // iOS blocks apps from opening OS Bluetooth settings directly.
+        // Open the app's Settings page (best available) and show a hint modal.
+        setShowBtInfo(true);
+        await Linking.openSettings();
+        return;
+      }
+      // Web / other — no BT capability, just show the info modal.
+      setShowBtInfo(true);
+    } catch {
+      setShowBtInfo(true);
+    }
   };
 
   const runCurrent = async () => {
@@ -783,17 +807,38 @@ export default function EditorScreen() {
         </ScrollView>
 
         <View style={styles.drawerFooter}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.footerLabel}>Sync</Text>
-            <Text style={styles.footerSub}>{syncMode === "cloud" ? "Cloud (MongoDB)" : "Local (device)"}</Text>
+          <Pressable
+            onPress={openBluetoothSettings}
+            style={styles.btBtn}
+            testID="connect-bt-keyboard-btn"
+          >
+            <Feather name="bluetooth" size={16} color={COLORS.brand} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.footerLabel}>Bluetooth keyboard</Text>
+              <Text style={styles.footerSub} numberOfLines={1}>
+                {Platform.OS === "android"
+                  ? "Open system Bluetooth settings"
+                  : Platform.OS === "ios"
+                  ? "Open Settings to pair"
+                  : "Mobile only"}
+              </Text>
+            </View>
+            <Feather name="external-link" size={14} color={COLORS.onSurfaceSecondary} />
+          </Pressable>
+
+          <View style={styles.drawerFooterRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.footerLabel}>Sync</Text>
+              <Text style={styles.footerSub}>{syncMode === "cloud" ? "Cloud (MongoDB)" : "Local (device)"}</Text>
+            </View>
+            <Switch
+              value={syncMode === "cloud"}
+              onValueChange={(v) => switchMode(v ? "cloud" : "local")}
+              trackColor={{ true: COLORS.brand, false: COLORS.surfaceTertiary }}
+              thumbColor={COLORS.onSurface}
+              testID="sync-toggle"
+            />
           </View>
-          <Switch
-            value={syncMode === "cloud"}
-            onValueChange={(v) => switchMode(v ? "cloud" : "local")}
-            trackColor={{ true: COLORS.brand, false: COLORS.surfaceTertiary }}
-            thumbColor={COLORS.onSurface}
-            testID="sync-toggle"
-          />
         </View>
       </Animated.View>
 
@@ -900,6 +945,28 @@ export default function EditorScreen() {
               </Pressable>
               <Pressable onPress={doCreateFile} style={styles.primaryBtn} testID="confirm-new-file">
                 <Text style={styles.primaryBtnLabel}>Create</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Bluetooth-keyboard info modal (shown when we can't deep-link directly, e.g. iOS or web) */}
+      <Modal visible={showBtInfo} transparent animationType="fade" onRequestClose={() => setShowBtInfo(false)}>
+        <Pressable style={styles.modalBackdrop} onPress={() => setShowBtInfo(false)}>
+          <Pressable style={styles.modalCard} onPress={() => {}} testID="bt-info-modal">
+            <Feather name="bluetooth" size={22} color={COLORS.brand} />
+            <Text style={styles.modalTitle}>Pair a Bluetooth keyboard</Text>
+            <Text style={styles.btInfoBody}>
+              {Platform.OS === "ios"
+                ? "iOS doesn't allow apps to open Bluetooth settings directly. Please open the Settings app and go to Bluetooth to pair your keyboard. Once paired, it will work everywhere in Syntax automatically."
+                : Platform.OS === "web"
+                ? "Bluetooth keyboard pairing is only available on physical iOS / Android devices. On desktop, pair via your OS Bluetooth panel."
+                : "We couldn't open your Bluetooth settings automatically. Open your phone's Settings app and go to Bluetooth to pair your keyboard."}
+            </Text>
+            <View style={styles.modalActions}>
+              <Pressable onPress={() => setShowBtInfo(false)} style={styles.primaryBtn} testID="bt-info-ok-btn">
+                <Text style={styles.primaryBtnLabel}>Got it</Text>
               </Pressable>
             </View>
           </Pressable>
@@ -1244,12 +1311,31 @@ const styles = StyleSheet.create({
   },
   fileName: { color: COLORS.onSurface, fontSize: TEXT.sm, fontFamily: FONT.mono, flex: 1 },
   drawerFooter: {
-    flexDirection: "row",
-    alignItems: "center",
     borderTopWidth: 1,
     borderTopColor: COLORS.border,
     paddingTop: SPACING.md,
     marginTop: SPACING.md,
+    gap: SPACING.sm,
+  },
+  drawerFooterRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  btBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SPACING.sm,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.sm,
+    borderRadius: RADIUS.md,
+    backgroundColor: COLORS.brandTertiary,
+    borderWidth: 1,
+    borderColor: COLORS.brand,
+  },
+  btInfoBody: {
+    color: COLORS.onSurfaceSecondary,
+    fontSize: TEXT.base,
+    lineHeight: 22,
   },
   footerLabel: { color: COLORS.onSurface, fontWeight: "700", fontSize: TEXT.base },
   footerSub: { color: COLORS.onSurfaceSecondary, fontSize: TEXT.sm },
