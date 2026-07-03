@@ -1,0 +1,145 @@
+{
+  "app_name": "Syntax Mobile IDE",
+  "personality": "7 Dark-First Utility",
+  "personality_one_liner": "A tactical, high-performance command center for on-the-go coding.",
+  "color": {
+    "surface": "#111111",
+    "onSurface": "#EDEDED",
+    "surfaceSecondary": "#1A1A1A",
+    "onSurfaceSecondary": "#A0A0A5",
+    "surfaceTertiary": "#262626",
+    "onSurfaceTertiary": "#C0C0C5",
+    "surfaceInverse": "#EEEEEE",
+    "onSurfaceInverse": "#111111",
+    "brand": "#FFB000",
+    "brandPrimary": "#FFB000",
+    "onBrandPrimary": "#111111",
+    "brandSecondary": "#E69E00",
+    "onBrandSecondary": "#111111",
+    "brandTertiary": "#332300",
+    "onBrandTertiary": "#FFB000",
+    "success": "#4CAF50",
+    "onSuccess": "#FFFFFF",
+    "warning": "#FF9800",
+    "onWarning": "#111111",
+    "error": "#F44336",
+    "onError": "#FFFFFF",
+    "info": "#009688",
+    "onInfo": "#FFFFFF",
+    "border": "#262626",
+    "borderStrong": "#404040",
+    "divider": "#1A1A1A"
+  },
+  "typography": {
+    "displayFontFamily": "IBM Plex Sans",
+    "textFontFamily": "JetBrains Mono",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Dense and structural. Keep generous margins for touch targets, but use tight sm/md spacing between code lines, file items, and console outputs to maximize visible information.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 4,
+    "md": 8,
+    "lg": 12,
+    "pill": 999
+  },
+  "shadow_tier": "0",
+  "navigation": "drawer_with_bottom_sheet",
+  "icon_set": "Feather",
+  "glassmorphism": {
+    "enabled": false,
+    "do's": [],
+    "dont's": [
+      "No blur or glassmorphism. This is a dense data/utility screen. Clarity and performance beat aesthetics. Use solid surfaceSecondary for elevation."
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "solid surfaceSecondary",
+      "android": "solid surfaceSecondary",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Code Editor (Main)",
+      "purpose": "The core coding workspace where users write, edit, and run code.",
+      "states": {
+        "loading": "Centered brandPrimary spinner against surface background.",
+        "empty": "No file open. Show the 'floating cubes' illustration in the center, with 'Open a file from the explorer' in onSurfaceSecondary, and a primary CTA 'Toggle Explorer'.",
+        "error": "File unreadable error overlay with a 'Retry' action."
+      },
+      "layout": "Use a Stack navigator wrapped inside a Drawer navigator. The Drawer holds the File Explorer. The main screen contains the Editor. The Header holds a hamburger menu (left), current filename in JetBrains Mono (center), and a 'Play/Run' brandPrimary icon button (right). Below the header, split the view horizontally: left gutter (surfaceSecondary) for line numbers, right area (surface) for code input. At the bottom of the screen, pinned above the keyboard, place a horizontally scrollable quick-action bar for coding symbols ({, }, (), ;, \")."
+    },
+    {
+      "name": "File Explorer (Drawer)",
+      "purpose": "Navigate directories, create files, and toggle local/cloud sync.",
+      "states": {
+        "loading": "Skeleton text lines matching the file tree structure.",
+        "empty": "'No files in project' text with an 'Add File' ghost button.",
+        "error": "Error reading directory with 'Reload' button."
+      },
+      "layout": "Occupies the left drawer. Header displays the workspace name. Below it, a list of files/folders. Active file uses a brandTertiary tinted background with a 2px brandPrimary left border. At the absolute bottom of the drawer, pin a settings row containing the 'Local/Cloud Sync' toggle switch."
+    },
+    {
+      "name": "Code Runner Console (Bottom Sheet)",
+      "purpose": "Displays stdout and stderr when a file is executed.",
+      "states": {
+        "loading": "Console text 'Compiling...' or 'Executing...' pulsing.",
+        "empty": "'No output generated.'",
+        "error": "N/A - Errors are printed directly as stderr text."
+      },
+      "layout": "Triggered by the Run button. Uses @gorhom/bottom-sheet popping over the editor. The sheet background is surfaceSecondary. Header has 'Console' and a 'Clear' icon. Content area is a scrollable text view. Standard output uses onSurface; error output uses the error color. Font is exclusively JetBrains Mono."
+    },
+    {
+      "name": "AI Assistant (Chat)",
+      "purpose": "Multi-turn Gemini 3 Pro chat to explain, ask, or generate code.",
+      "states": {
+        "loading": "Skeleton chat bubbles.",
+        "empty": "Center the glowing cubes illustration with a prompt 'How can Gemini assist your code today?'",
+        "error": "Message failed to send indicator next to the failed bubble."
+      },
+      "layout": "Can be accessed via a FAB or a header action in the editor. Classic chat layout. User bubbles are surfaceTertiary; AI bubbles are surfaceSecondary with a subtle brandPrimary top-border. Bottom input area contains a TextInput and a Send button. When the AI generates code, it must be presented in a syntax-highlighted block (surface) with a 'Copy' and 'Insert at Cursor' button."
+    }
+  ],
+  "images": {
+    "ai_empty_state": {
+      "url": "https://images.unsplash.com/photo-1622737133809-d95047b9e673?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1NzZ8MHwxfHNlYXJjaHwxfHxtaW5pbWFsaXN0JTIwZ2VvbWV0cmljJTIwZ2xvd2luZyUyMGN1YmUlMjBkYXJrJTIwYmFja2dyb3VuZHxlbnwwfHx8fDE3ODMwNDk1MjV8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Floating glowing geometric cubes in the dark"
+    }
+  },
+  "haptics": {
+    "run_code": "impactHeavy",
+    "open_drawer": "impactLight",
+    "insert_ai_code": "notificationSuccess",
+    "toggle_sync": "selection"
+  },
+  "instructions_to_main_agent": [
+    "Strictly follow the Dark-First Utility guidelines. No blur, no glassmorphism, no rounded playful UI. The app should feel like a tactical terminal.",
+    "Do not use any shade of blue, purple, or indigo anywhere in the app. Stick to the provided warm Amber (brandPrimary) and deep Obsidian grays.",
+    "Implement the File Explorer inside a Drawer Navigator. The active file should have a brandTertiary background with a hard left border.",
+    "The Code Runner Console MUST be a bottom sheet (`@gorhom/bottom-sheet`) that overlays the editor when 'Run' is tapped. It should not be a separate screen.",
+    "Include a horizontal scrollable tool strip anchored to the top of the keyboard (or bottom of the editor) for quick insertion of common coding symbols like brackets and semicolons.",
+    "For the code editor and console outputs, strictly use the JetBrains Mono font to ensure code is properly monospaced. Use IBM Plex Sans for general UI text.",
+    "The AI Assistant must have an 'Insert at Cursor' action for code blocks to seamlessly inject Gemini's response directly into the active editor file."
+  ]
+}
