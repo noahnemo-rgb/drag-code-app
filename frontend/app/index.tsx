@@ -523,7 +523,8 @@ export default function EditorScreen() {
         return;
       }
       const filePath = cfg.path.endsWith("/") ? `${cfg.path}${activeFile.name}` : cfg.path;
-      const res = await pushToGitHub({
+      // pushToGitHub throws on any non-2xx — reaching this line = success.
+      await pushToGitHub({
         pat,
         owner: cfg.owner,
         repo: cfg.repo,
@@ -532,7 +533,7 @@ export default function EditorScreen() {
         message: `Syntax IDE: update ${activeFile.name}`,
         content,
       });
-      setSilentPushStatus(res.ok ? "ok" : "err");
+      setSilentPushStatus("ok");
     } catch {
       setSilentPushStatus("err");
     }

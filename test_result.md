@@ -293,3 +293,29 @@ agent_communication:
     - agent: "testing"
       message: |
         Iteration 11: 20/20 checks PASSED. Both features work end-to-end including real Gemini 3 Pro round-trip. All prior regression checks (palettes, RECENT, sections, Push, ⌘S) still green. Two minor advisories (console sheet lingers on /ai; RN-Web shadow*/pointerEvents deprecations) — main agent applied the sheet-dismiss fix; deprecation warnings deferred as pre-existing.
+    - agent: "main"
+      message: |
+        Iteration 12: shipped Episode Mode (critical accessibility feature).
+          - New src/lib/episode-store.ts (persisted global state, useEpisodeMode hook) and src/lib/episode-idb.ts (IndexedDB on web, AsyncStorage on native; fire-and-forget keystroke autosave with 500-entry log cap).
+          - FileDrawer footer: new Episode toggle row above Sync (visible without scrolling).
+          - Header: moon badge next to filename when ON; overlay (rgba black 18%) covers entire SafeAreaView.
+          - Orientation: expo-screen-orientation locks portrait on native, no-op on web.
+          - Silenced: Saved / Fences-stripped toasts suppressed when ON.
+          - Silent push: header push icon bypasses PushModal when Episode ON, using saved PAT+config; tiny green/red dot on the icon. Falls back to opening modal if no saved config.
+          - Command Palette entry to toggle.
+    - agent: "testing"
+      message: |
+        Iteration 12: 8/11 PASS, 2 HIGH bugs, 1 could-not-verify (IDB inspection env limit).
+          BUG 1: Switch double-toggle (row Pressable + Switch both called toggle).
+          BUG 2: Silent-push fallback modal didn't open (later revealed to be a test-timing artifact — modal DID open, main-agent verified).
+    - agent: "main"
+      message: |
+        Iteration 13: fixed both HIGH bugs.
+          Fix 1: split episode-toggle into an outer View + inner Pressable ("episode-row") + Switch — only one handler fires per tap.
+          Fix 2: verified silent-push fallback works; also fixed the deprecated `pointerEvents` prop on episode-overlay/push-dot by moving it into `style`.
+    - agent: "testing"
+      message: |
+        Iteration 13: All fixes VERIFIED. Switch single-toggles; row single-toggles; fallback modal opens ~150ms; happy path shows push-dot-err ~300ms with dummy PAT (401 as expected). Regressions green. Reported one latent bug (silentGithubPush treated `res.ok` from pushToGitHub which returns {commitSha,url} — success would erroneously show err dot). retest_needed=false.
+    - agent: "main"
+      message: |
+        Iteration 14: fixed the latent silent-push success bug — pushToGitHub throws on failure, so reaching the line after `await pushToGitHub(...)` always means success. Now `setSilentPushStatus("ok")` unconditionally after the awaited call resolves.
