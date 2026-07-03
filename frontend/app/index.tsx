@@ -30,6 +30,7 @@ import { highlightLine, PALETTE } from "@/src/lib/highlight";
 import { store } from "@/src/lib/store";
 import { settings, SyncMode } from "@/src/lib/storage";
 import { fuzzyScore, highlightMatches } from "@/src/lib/fuzzy";
+import { loadMru, pushMru, recencyBonus, sortByMru } from "@/src/lib/mru";
 import { useEditorShortcuts } from "@/src/hooks/use-editor-shortcuts";
 import { COLORS, FONT, RADIUS, SPACING, TEXT } from "@/src/theme";
 
@@ -124,6 +125,8 @@ export default function EditorScreen() {
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [commandQuery, setCommandQuery] = useState("");
   const [commandIndex, setCommandIndex] = useState(0);
+  const [recentFiles, setRecentFiles] = useState<string[]>([]);
+  const [recentCommands, setRecentCommands] = useState<string[]>([]);
 
   const activeFile = useMemo(() => files.find((f) => f.id === activeFileId) ?? null, [files, activeFileId]);
 
@@ -134,17 +137,19 @@ export default function EditorScreen() {
 
   const quickResults = useMemo<QuickResult[]>(() => {
     const q = quickFileQuery.trim();
-    // Empty query → just show files (fast + focused)
+    // Empty query → show files sorted by recency (most-recently opened first)
     if (!q) {
-      return files.slice(0, 30).map((file) => ({ kind: "file" as const, file, score: 0 }));
+      return sortByMru(files, recentFiles, (f) => f.id)
+        .slice(0, 30)
+        .map((file) => ({ kind: "file" as const, file, score: 0 }));
     }
 
     const results: QuickResult[] = [];
 
-    // 1) File-name fuzzy matches
+    // 1) File-name fuzzy matches + recency bonus
     for (const f of files) {
       const s = fuzzyScore(q, f.name);
-      if (s >= 0) results.push({ kind: "file", file: f, score: s + 20 }); // bias file names higher
+      if (s >= 0) results.push({ kind: "file", file: f, score: s + 20 + recencyBonus(recentFiles, f.id) });
     }
 
     // 2) File-content substring matches (case-insensitive, per line)
@@ -155,7 +160,6 @@ export default function EditorScreen() {
       for (let i = 0; i < lines.length; i++) {
         const idx = lines[i].toLowerCase().indexOf(needle);
         if (idx === -1) continue;
-        // Score: base + boundary bonus + shorter-line bonus
         let score = 30;
         if (idx === 0 || /[\s({[\-.]/.test(lines[i][idx - 1] ?? "")) score += 5;
         score += Math.max(0, 15 - Math.floor(lines[i].length / 8));
@@ -170,7 +174,6 @@ export default function EditorScreen() {
         results.push({ kind: "snippet", snippet: s, score: titleScore + 5 });
         continue;
       }
-      // Also consider description / tags
       const inDesc = s.description && s.description.toLowerCase().includes(needle);
       const inTags = s.tags?.some((t) => t.toLowerCase().includes(needle));
       if (inDesc || inTags) {
@@ -179,7 +182,7 @@ export default function EditorScreen() {
     }
 
     return results.sort((a, b) => b.score - a.score).slice(0, 40);
-  }, [files, snippetsCache, quickFileQuery]);
+  }, [files, snippetsCache, quickFileQuery, recentFiles]);
 
   useEffect(() => {
     setQuickFileIndex(0);
@@ -210,6 +213,28 @@ export default function EditorScreen() {
       await refreshProjects(mode);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Load MRUs on mount
+  useEffect(() => {
+    (async () => {
+      const [f, c] = await Promise.all([
+        loadMru("syntax.recent_files"),
+        loadMru("syntax.recent_commands"),
+      ]);
+      setRecentFiles(f);
+      setRecentCommands(c);
+    })();
+  }, []);
+
+  const bumpRecentFile = useCallback(async (id: string) => {
+    const next = await pushMru("syntax.recent_files", id);
+    setRecentFiles(next);
+  }, []);
+
+  const bumpRecentCommand = useCallback(async (id: string) => {
+    const next = await pushMru("syntax.recent_commands", id);
+    setRecentCommands(next);
   }, []);
 
   const refreshProjects = useCallback(async (mode: SyncMode) => {
@@ -283,8 +308,9 @@ export default function EditorScreen() {
     setForcedSelection({ start: 0, end: 0 });
     setTimeout(() => setForcedSelection(undefined), 50);
     await settings.setActiveFile(fileId);
+    await bumpRecentFile(fileId);
     closeDrawer();
-  }, [activeFile, content, savedContent, syncMode, files]);
+  }, [activeFile, content, savedContent, syncMode, files, bumpRecentFile]);
 
   // Autosave when content changes (debounced)
   useEffect(() => {
@@ -637,13 +663,14 @@ export default function EditorScreen() {
 
   const commandMatches = useMemo(() => {
     const q = commandQuery.trim();
-    if (!q) return commands;
+    if (!q) return sortByMru(commands, recentCommands, (c) => c.id);
     return commands
       .map((c) => ({ c, s: fuzzyScore(q, `${c.label} ${c.hint}`) }))
       .filter((x) => x.s >= 0)
+      .map((x) => ({ ...x, s: x.s + recencyBonus(recentCommands, x.c.id) }))
       .sort((a, b) => b.s - a.s)
       .map((x) => x.c);
-  }, [commands, commandQuery]);
+  }, [commands, commandQuery, recentCommands]);
 
   useEffect(() => {
     setCommandIndex(0);
@@ -653,6 +680,7 @@ export default function EditorScreen() {
     if (c.disabled) return;
     setShowCommandPalette(false);
     Haptics.selectionAsync();
+    void bumpRecentCommand(c.id);
     await c.run();
   };
 
