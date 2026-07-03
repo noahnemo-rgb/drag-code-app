@@ -31,6 +31,7 @@ import { store } from "@/src/lib/store";
 import { settings, SyncMode } from "@/src/lib/storage";
 import { fuzzyScore, highlightMatches } from "@/src/lib/fuzzy";
 import { loadMru, pushMru, recencyBonus, sortByMru } from "@/src/lib/mru";
+import { PushModal } from "@/src/components/PushModal";
 import { useEditorShortcuts } from "@/src/hooks/use-editor-shortcuts";
 import { COLORS, FONT, RADIUS, SPACING, TEXT } from "@/src/theme";
 
@@ -118,6 +119,7 @@ export default function EditorScreen() {
   const [showBtInfo, setShowBtInfo] = useState(false);
   const [savedToast, setSavedToast] = useState<boolean>(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showPush, setShowPush] = useState(false);
   const [showQuickFile, setShowQuickFile] = useState(false);
   const [quickFileQuery, setQuickFileQuery] = useState("");
   const [quickFileIndex, setQuickFileIndex] = useState(0);
@@ -518,7 +520,8 @@ export default function EditorScreen() {
       void runCurrent();
     },
     onEscape: () => {
-      if (showCommandPalette) setShowCommandPalette(false);
+      if (showPush) setShowPush(false);
+      else if (showCommandPalette) setShowCommandPalette(false);
       else if (showQuickFile) setShowQuickFile(false);
       else if (showShortcuts) setShowShortcuts(false);
       else if (findOpen) closeFind();
@@ -601,6 +604,13 @@ export default function EditorScreen() {
         hint: "Chat with Gemini",
         shortcut: "⌘ K",
         run: () => router.push("/ai"),
+      },
+      {
+        id: "push",
+        label: "Push code…",
+        hint: "GitHub / webhook / share",
+        disabled: !activeFile,
+        run: () => setShowPush(true),
       },
       {
         id: "snippets",
@@ -846,6 +856,15 @@ export default function EditorScreen() {
               </View>
             ) : null}
           </View>
+        </Pressable>
+        <Pressable
+          onPress={() => setShowPush(true)}
+          disabled={!activeFile}
+          style={[styles.iconBtn, !activeFile && { opacity: 0.4 }]}
+          testID="open-push-btn"
+          hitSlop={8}
+        >
+          <Feather name="upload-cloud" size={20} color={COLORS.onSurface} />
         </Pressable>
         <Pressable onPress={() => router.push("/snippets")} style={styles.iconBtn} testID="open-snippets-btn" hitSlop={8}>
           <Feather name="package" size={20} color={COLORS.onSurface} />
@@ -1305,6 +1324,15 @@ export default function EditorScreen() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      {/* Push modal (GitHub / webhook / share) */}
+      <PushModal
+        visible={showPush}
+        filename={activeFile?.name ?? "file.txt"}
+        language={activeFile?.language ?? "plaintext"}
+        content={content}
+        onClose={() => setShowPush(false)}
+      />
 
       {/* Bluetooth-keyboard info modal (shown when we can't deep-link directly, e.g. iOS or web) */}
       <Modal visible={showBtInfo} transparent animationType="fade" onRequestClose={() => setShowBtInfo(false)}>

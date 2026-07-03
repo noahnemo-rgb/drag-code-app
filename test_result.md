@@ -101,3 +101,135 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+
+user_problem_statement: |
+  Build a mobile app to code within a GUI. Currently implementing the "Push Code" feature
+  which exports the current file via GitHub REST API (PAT), custom HTTPS webhook, or the
+  native OS Share sheet. Needs functional verification.
+
+frontend:
+  - task: "Push Modal – opens from header icon and command palette"
+    implemented: true
+    working: "NA"
+    file: "app/frontend/app/index.tsx, app/frontend/src/components/PushModal.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Header upload icon and Command Palette entry 'Push code…' both wired to setShowPush(true). Modal has testID 'push-modal'."
+
+  - task: "Push Modal – tab switching (GitHub / Webhook / Share)"
+    implemented: true
+    working: "NA"
+    file: "app/frontend/src/components/PushModal.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Three tabs with testIDs push-tab-github, push-tab-webhook, push-tab-share. Verify active-state styling changes."
+
+  - task: "GitHub push – form validation and error handling"
+    implemented: true
+    working: "NA"
+    file: "app/frontend/src/lib/push.ts, app/frontend/src/components/PushModal.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Empty PAT / missing owner|repo|branch|path must surface inline error via push-status. With a dummy PAT the GitHub API will 401 – the error message must be shown and must redact the token."
+
+  - task: "GitHub PAT – secure storage (web fallback to AsyncStorage)"
+    implemented: true
+    working: "NA"
+    file: "app/frontend/src/lib/push.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "On web, expo-secure-store is not available – code falls back to AsyncStorage. After saving a PAT and reopening the modal, the field should be prefilled and label switches to 'GitHub PAT (saved on device)'. 'Clear stored token' must wipe it."
+
+  - task: "Webhook push – https-only guard and POST"
+    implemented: true
+    working: "NA"
+    file: "app/frontend/src/lib/push.ts, app/frontend/src/components/PushModal.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "http:// URL must throw 'Webhook URL must use https://'. Real POST to a public test endpoint (e.g. https://httpbin.org/post) should return 200 and show 'Webhook accepted (HTTP 200).'"
+
+  - task: "Native Share – opens OS share sheet or web fallback"
+    implemented: true
+    working: "NA"
+    file: "app/frontend/src/lib/push.ts"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "On web, expo-sharing.isAvailableAsync() returns false so it falls back to React Native Share.share. Verify tapping 'Open Share sheet' doesn't crash and either opens a share UI or reports a benign message."
+
+  - task: "Push regression – existing shortcuts (⌘F, ⌘P, ⇧⌘P, ⌘Enter, ⌘S, Esc) still work"
+    implemented: true
+    working: "NA"
+    file: "app/frontend/app/index.tsx, app/frontend/src/hooks/use-editor-shortcuts.ts"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Regression check – Esc must close Push modal (existing effect on line 523). Command Palette (⇧⌘P) still contains 'Push code…' entry."
+
+metadata:
+  created_by: "main_agent"
+  version: "1.0"
+  test_sequence: 5
+  run_ui: true
+
+test_plan:
+  current_focus:
+    - "Push Modal – opens from header icon and command palette"
+    - "Push Modal – tab switching (GitHub / Webhook / Share)"
+    - "GitHub push – form validation and error handling"
+    - "GitHub PAT – secure storage (web fallback to AsyncStorage)"
+    - "Webhook push – https-only guard and POST"
+    - "Native Share – opens OS share sheet or web fallback"
+    - "Push regression – existing shortcuts (⌘F, ⌘P, ⇧⌘P, ⌘Enter, ⌘S, Esc) still work"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    - agent: "main"
+      message: |
+        Please test the newly-added "Push Code" feature end-to-end on the web preview at http://localhost:3000.
+
+        Trigger points:
+          1. Header icon: the upload / arrow-up icon in the top bar (right of the filename, next to the box/package icon).
+          2. Command Palette: press ⇧⌘P (or long-press the filename) and select "Push code…".
+
+        Verify:
+          - Modal opens with testID 'push-modal' and three tabs (push-tab-github, push-tab-webhook, push-tab-share).
+          - GitHub tab: submitting with empty PAT / empty owner|repo|branch|path shows an inline validation message.
+            Then enter dummy values (pat=ghp_dummy, owner=octocat, repo=hello-world, branch=main, path=test.py) and tap 'Push to GitHub'. Expect a 401 error surfaced in push-status – token must be redacted (not visible in full).
+          - Reopen the modal and confirm PAT field label reads 'GitHub PAT (saved on device)' and the token is prefilled.
+          - Tap 'Clear stored token'. Reopen – field should be empty and label back to 'GitHub PAT'.
+          - Webhook tab: entering 'http://example.com' and tapping POST shows 'Webhook URL must use https://'. Entering 'https://httpbin.org/post' should return 200 and show 'Webhook accepted (HTTP 200).'
+          - Share tab: tapping 'Open Share sheet' on web should not crash (web fallback path).
+          - Esc key closes the modal.
+
+        No backend testing needed – all push logic is client-side.
+
+        Test credentials: none required (all tokens are dummy / user-supplied at runtime).
