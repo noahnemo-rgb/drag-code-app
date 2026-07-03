@@ -2,6 +2,7 @@ import { Feather } from "@expo/vector-icons";
 import { BottomSheetBackdrop, BottomSheetModal, BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import * as Haptics from "expo-haptics";
 import { useFocusEffect, useRouter } from "expo-router";
+import * as ScreenOrientation from "expo-screen-orientation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -30,6 +31,8 @@ import { settings, SyncMode } from "@/src/lib/storage";
 import { fuzzyScore } from "@/src/lib/fuzzy";
 import { LANGS, inferLang, starterFor } from "@/src/lib/language";
 import { loadMru, pushMru, recencyBonus, sortByMru } from "@/src/lib/mru";
+import { enqueueKeystroke } from "@/src/lib/episode-idb";
+import { useEpisodeMode } from "@/src/lib/episode-store";
 import { stripMarkdownFences } from "@/src/lib/paste";
 import { BtInfoModal } from "@/src/components/BtInfoModal";
 import { CommandPaletteModal, type PaletteCommand } from "@/src/components/CommandPaletteModal";
@@ -38,6 +41,7 @@ import { LangMenu } from "@/src/components/LangMenu";
 import { NewFileModal } from "@/src/components/NewFileModal";
 import { PromptModal } from "@/src/components/PromptModal";
 import { PushModal } from "@/src/components/PushModal";
+import { githubPat, loadGitHubConfig, pushToGitHub } from "@/src/lib/push";
 import { QuickFileSwitcherModal, type QuickResult } from "@/src/components/QuickFileSwitcherModal";
 import { ShortcutsSheet } from "@/src/components/ShortcutsSheet";
 import { useEditorShortcuts } from "@/src/hooks/use-editor-shortcuts";
@@ -86,6 +90,10 @@ export default function EditorScreen() {
   const [savedToast, setSavedToast] = useState<boolean>(false);
   const [pasteToast, setPasteToast] = useState<boolean>(false);
   const prevContentLenRef = useRef<number>(0);
+  const { enabled: episodeEnabled, toggle: episodeToggle } = useEpisodeMode();
+  const episodeRef = useRef<boolean>(episodeEnabled);
+  useEffect(() => { episodeRef.current = episodeEnabled; }, [episodeEnabled]);
+  const [silentPushStatus, setSilentPushStatus] = useState<"ok" | "err" | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showPush, setShowPush] = useState(false);
   const [showQuickFile, setShowQuickFile] = useState(false);
@@ -358,22 +366,31 @@ export default function EditorScreen() {
 
   // Editor onChange with automatic Markdown-fence stripping on paste. This lets
   // users paste code straight from AI chat (```python\n...\n```) and get just
-  // the runnable body inserted into the file.
+  // the runnable body inserted into the file. In Episode Mode, every keystroke
+  // is also enqueued to IndexedDB for zero-loss autosave.
   const handleCodeChange = useCallback((next: string) => {
     const prevLen = prevContentLenRef.current;
+    let finalText = next;
+    let stripped = false;
     if (next.length - prevLen > 5 && next.includes("```")) {
       const cleaned = stripMarkdownFences(next);
       if (cleaned !== next) {
-        prevContentLenRef.current = cleaned.length;
-        setContent(cleaned);
-        setPasteToast(true);
-        setTimeout(() => setPasteToast(false), 1600);
-        Haptics.selectionAsync();
-        return;
+        finalText = cleaned;
+        stripped = true;
       }
     }
-    prevContentLenRef.current = next.length;
-    setContent(next);
+    prevContentLenRef.current = finalText.length;
+    setContent(finalText);
+    if (episodeRef.current && activeFileIdRef.current) {
+      enqueueKeystroke(activeFileIdRef.current, finalText);
+    }
+    if (stripped && !episodeRef.current) {
+      setPasteToast(true);
+      setTimeout(() => setPasteToast(false), 1600);
+      Haptics.selectionAsync();
+    } else if (stripped) {
+      Haptics.selectionAsync();
+    }
   }, []);
 
   useEffect(() => {
@@ -402,8 +419,10 @@ export default function EditorScreen() {
       pendingReplaceRef.current = null;
       prevContentLenRef.current = replace.length;
       setContent(replace);
-      setPasteToast(true);
-      setTimeout(() => setPasteToast(false), 1600);
+      if (!episodeRef.current) {
+        setPasteToast(true);
+        setTimeout(() => setPasteToast(false), 1600);
+      }
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       return;
     }
@@ -491,6 +510,56 @@ export default function EditorScreen() {
     router.push("/ai");
   }, [runOutput, activeFile, content, router]);
 
+  // Silent GitHub push — used in Episode Mode so the header push icon never
+  // pops the modal. Falls back to opening the modal if no saved config exists.
+  const silentGithubPush = useCallback(async () => {
+    if (!activeFile) return;
+    try {
+      const [pat, cfg] = await Promise.all([githubPat.get(), loadGitHubConfig()]);
+      if (!pat || !cfg?.owner || !cfg?.repo || !cfg?.branch || !cfg?.path) {
+        // No saved config — silently fall back to opening the modal so the user
+        // can complete setup exactly once.
+        setShowPush(true);
+        return;
+      }
+      const filePath = cfg.path.endsWith("/") ? `${cfg.path}${activeFile.name}` : cfg.path;
+      const res = await pushToGitHub({
+        pat,
+        owner: cfg.owner,
+        repo: cfg.repo,
+        branch: cfg.branch,
+        path: filePath,
+        message: `Syntax IDE: update ${activeFile.name}`,
+        content,
+      });
+      setSilentPushStatus(res.ok ? "ok" : "err");
+    } catch {
+      setSilentPushStatus("err");
+    }
+    setTimeout(() => setSilentPushStatus(null), 2400);
+  }, [activeFile, content]);
+
+  const handleHeaderPush = useCallback(() => {
+    if (episodeRef.current) {
+      void silentGithubPush();
+    } else {
+      setShowPush(true);
+    }
+  }, [silentGithubPush]);
+
+  // Enforce portrait lock while Episode Mode is on. Released on toggle-off / unmount.
+  useEffect(() => {
+    if (Platform.OS === "web") return; // Web browsers don't honor screen-orientation from JS.
+    if (episodeEnabled) {
+      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
+    } else {
+      ScreenOrientation.unlockAsync().catch(() => {});
+    }
+    return () => {
+      ScreenOrientation.unlockAsync().catch(() => {});
+    };
+  }, [episodeEnabled]);
+
   const openBluetoothSettings = async () => {
     Haptics.selectionAsync();
     try {
@@ -560,8 +629,10 @@ export default function EditorScreen() {
         setSavedContent(content);
       }
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setSavedToast(true);
-      setTimeout(() => setSavedToast(false), 1200);
+      if (!episodeRef.current) {
+        setSavedToast(true);
+        setTimeout(() => setSavedToast(false), 1200);
+      }
     },
     onRun: () => {
       void runCurrent();
@@ -615,8 +686,10 @@ export default function EditorScreen() {
             await store.updateFile(syncMode, activeFile.id, { content });
             setSavedContent(content);
           }
-          setSavedToast(true);
-          setTimeout(() => setSavedToast(false), 1200);
+          if (!episodeRef.current) {
+            setSavedToast(true);
+            setTimeout(() => setSavedToast(false), 1200);
+          }
         },
       },
       {
@@ -698,6 +771,12 @@ export default function EditorScreen() {
         shortcut: "⌘ /",
         run: () => setShowShortcuts(true),
       },
+      {
+        id: "episode",
+        label: episodeEnabled ? "Turn Episode Mode OFF" : "Turn Episode Mode ON",
+        hint: "Dim UI, portrait lock, keystroke autosave",
+        run: () => episodeToggle(),
+      },
     ];
     return list;
   }, [
@@ -706,6 +785,7 @@ export default function EditorScreen() {
     content,
     savedContent,
     syncMode,
+    episodeEnabled,
     // Handlers referenced above are stable within a render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   ]);
@@ -899,6 +979,11 @@ export default function EditorScreen() {
           </Text>
           <View style={styles.filenameSubRow}>
             <Text style={styles.langLabel}>{LANGS.find((l) => l.key === lang)?.label ?? "—"}</Text>
+            {episodeEnabled ? (
+              <View style={styles.moonBadge} testID="episode-badge">
+                <Feather name="moon" size={11} color={COLORS.brand} />
+              </View>
+            ) : null}
             {hwKeyboard ? (
               <View style={styles.hwBadge} testID="hw-keyboard-badge">
                 <Text style={styles.hwBadgeLabel}>HW ⌘</Text>
@@ -906,15 +991,27 @@ export default function EditorScreen() {
             ) : null}
           </View>
         </Pressable>
-        <Pressable
-          onPress={() => setShowPush(true)}
-          disabled={!activeFile}
-          style={[styles.iconBtn, !activeFile && { opacity: 0.4 }]}
-          testID="open-push-btn"
-          hitSlop={8}
-        >
-          <Feather name="upload-cloud" size={20} color={COLORS.onSurface} />
-        </Pressable>
+        <View style={{ position: "relative" }}>
+          <Pressable
+            onPress={handleHeaderPush}
+            disabled={!activeFile}
+            style={[styles.iconBtn, !activeFile && { opacity: 0.4 }]}
+            testID="open-push-btn"
+            hitSlop={8}
+          >
+            <Feather name="upload-cloud" size={20} color={COLORS.onSurface} />
+          </Pressable>
+          {silentPushStatus ? (
+            <View
+              style={[
+                styles.pushDot,
+                { backgroundColor: silentPushStatus === "ok" ? COLORS.success ?? "#4ade80" : "#ef4444" },
+              ]}
+              testID={`push-dot-${silentPushStatus}`}
+              pointerEvents="none"
+            />
+          ) : null}
+        </View>
         <Pressable onPress={() => router.push("/snippets")} style={styles.iconBtn} testID="open-snippets-btn" hitSlop={8}>
           <Feather name="package" size={20} color={COLORS.onSurface} />
         </Pressable>
@@ -1303,6 +1400,15 @@ export default function EditorScreen() {
 
       {/* Language picker modal */}
       <LangMenu visible={showLangMenu} current={lang} onSelect={changeLanguage} onClose={() => setShowLangMenu(false)} />
+
+      {/* Episode Mode dimming overlay — captures nothing, purely visual. */}
+      {episodeEnabled ? (
+        <View
+          pointerEvents="none"
+          style={styles.episodeDim}
+          testID="episode-overlay"
+        />
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -1376,6 +1482,32 @@ const styles = StyleSheet.create({
     borderColor: COLORS.brand,
   },
   whyBtnLabel: { color: COLORS.brand, fontWeight: "700", fontSize: TEXT.sm - 1 },
+  moonBadge: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.brandTertiary,
+    borderWidth: 1,
+    borderColor: COLORS.brand,
+  },
+  pushDot: {
+    position: "absolute",
+    top: 2,
+    right: 2,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  episodeDim: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0,0,0,0.18)",
+  },
 
   filename: {
     color: COLORS.onSurface,

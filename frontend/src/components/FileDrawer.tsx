@@ -1,6 +1,7 @@
 import { Feather } from "@expo/vector-icons";
 import { Animated, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import type { FileItem, Project } from "@/src/lib/api";
+import { useEpisodeMode } from "@/src/lib/episode-store";
 import type { SyncMode } from "@/src/lib/storage";
 import { COLORS, FONT, RADIUS, SPACING, TEXT } from "@/src/theme";
 
@@ -45,6 +46,7 @@ export function FileDrawer({
   onSyncModeChange: (m: SyncMode) => void;
   onBluetooth: () => void;
 }) {
+  const { enabled: episodeEnabled, toggle: toggleEpisode } = useEpisodeMode();
   return (
     <>
       {open ? (
@@ -155,6 +157,29 @@ export function FileDrawer({
               </Text>
             </View>
             <Feather name="external-link" size={14} color={COLORS.onSurfaceSecondary} />
+          </Pressable>
+
+          <Pressable
+            onPress={toggleEpisode}
+            style={[styles.episodeBtn, episodeEnabled && styles.episodeBtnActive]}
+            testID="episode-toggle"
+          >
+            <View style={[styles.episodeIcon, episodeEnabled && { borderColor: COLORS.brand }]}>
+              <Feather name="moon" size={13} color={episodeEnabled ? COLORS.brand : COLORS.onSurfaceSecondary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.footerLabel}>Episode Mode</Text>
+              <Text style={styles.footerSub} numberOfLines={1}>
+                {episodeEnabled ? "Dim · portrait · keystroke autosave" : "For vertigo / bedridden use"}
+              </Text>
+            </View>
+            <Switch
+              value={episodeEnabled}
+              onValueChange={toggleEpisode}
+              trackColor={{ true: COLORS.brand, false: COLORS.surfaceTertiary }}
+              thumbColor={COLORS.onSurface}
+              testID="episode-switch"
+            />
           </Pressable>
 
           <View style={styles.footerRow}>
@@ -270,4 +295,25 @@ const styles = StyleSheet.create({
   },
   footerLabel: { color: COLORS.onSurface, fontWeight: "700", fontSize: TEXT.base },
   footerSub: { color: COLORS.onSurfaceSecondary, fontSize: TEXT.sm },
+  episodeBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SPACING.sm,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.sm,
+    borderRadius: RADIUS.md,
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  episodeBtnActive: { borderColor: COLORS.brand, backgroundColor: COLORS.brandTertiary },
+  episodeIcon: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
 });

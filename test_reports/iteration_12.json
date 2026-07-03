@@ -1,0 +1,58 @@
+{
+  "summary": "Frontend-only Episode Mode tests on 390x844 web preview. Core Episode features WORK: toggle placement above Sync (visible without scroll), overlay + moon badge render on ON, AsyncStorage persistence (key syntax.episode.enabled), command-palette entry with correctly-updating label, saved-toast + paste-toast are suppressed while ON and reappear once OFF, fence-stripping still runs silently while ON (verified: content 'print(\"yo\")' after fenced paste in Ep ON, no toast). Confirmed 2 concrete bugs and 1 could-not-verify. Deprecation warnings detected: props.pointerEvents (episode-overlay/push-dot). No Expo Go audio/video deprecations found in this scope.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "FileDrawer episode-switch",
+        "issue": "Tapping the Switch (data-testid=\"episode-switch\") does NOT change Episode state. The Switch is wrapped inside a Pressable whose onPress also calls toggleEpisode, so pressing the switch triggers BOTH the parent Pressable onPress AND the Switch onValueChange, producing a double-toggle (net no-change). Reproduction: open drawer → tap the switch thumb → localStorage syntax.episode.enabled stays at previous value (verified: before=null, after clicking [data-testid=\"episode-switch\"] input = '0', overlay stays off). Tapping the row wrapper (episode-toggle) DOES work. Fix: move the Switch out of the Pressable, OR remove onValueChange, OR wrap the switch in a View that stops propagation. Reference: /app/frontend/src/components/FileDrawer.tsx:162-183",
+        "testID": "episode-switch",
+        "priority": "HIGH"
+      },
+      {
+        "component": "Silent push fallback (Episode ON, no saved config)",
+        "issue": "Per spec, with Episode ON and no PAT/config saved, tapping open-push-btn should silently fall back to opening the Push modal so setup can complete once. Observed: modal did NOT open (no 'Push', 'GitHub', or 'Personal access token' text found in DOM; no push-dot appeared either). silentGithubPush() reaches setShowPush(true) in code, but no push modal is rendered/visible. Suspect either PushModal doesn't render on visible=true, or an exception is thrown inside silentGithubPush before the fallback path. Reference: /app/frontend/app/index.tsx:515-548 and PushModal component. Please verify PushModal visibility contract.",
+        "testID": "open-push-btn",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "IndexedDB keystroke autosave (Episode ON)",
+        "issue": "Could not positively verify entries were written to indexedDB db 'syntax-episode' stores 'latest' and 'keystrokes'. After typing via page.keyboard.type, the code-input value did NOT reflect the typed characters (likely a test-driver quirk with the overlay/hidden-TextInput setup). Fence-strip flow via execCommand DID modify content (proving onChangeText is invoked in that path), which should also enqueue a keystroke — but IDB inspection returned stores:[] on multiple attempts. Please re-verify manually: with Ep ON, type in the editor and check indexedDB → syntax-episode → latest and keystrokes stores actually populate. No JS errors were surfaced from the IDB writer, so this may just be a test-flow limitation. Files: /app/frontend/src/lib/episode-idb.ts, /app/frontend/app/index.tsx:371-394",
+        "affected_testIDs": ["code-input"]
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": [
+      {
+        "component": "episode-overlay / push-dot",
+        "issue": "Uses deprecated `pointerEvents` prop on View. Console warns: 'props.pointerEvents is deprecated. Use style.pointerEvents'. Reference: /app/frontend/app/index.tsx:1011 (push-dot) and /app/frontend/app/index.tsx:1407 (episode-overlay). Migrate to style={{ pointerEvents: 'none' }}."
+      },
+      {
+        "component": "savedToast (shadow* styles)",
+        "issue": "Deprecated 'shadow*' style props warning. Migrate to `boxShadow`. Reference: /app/frontend/app/index.tsx style savedToast (~line 1454)."
+      }
+    ]
+  },
+  "test_report_links": ["/app/test_reports/iteration_12.json"],
+  "action_items": [
+    "FIX: Prevent double-toggle in FileDrawer Episode row. Either (a) remove `onValueChange={toggleEpisode}` from the Switch (parent Pressable already toggles), or (b) unwrap the Switch from the Pressable and put it in a sibling View that doesn't bubble. Currently tapping the switch thumb is a no-op — bad UX for a critical accessibility toggle.",
+    "FIX/VERIFY: silent push fallback with Episode ON + no config must open the PushModal. Ensure PushModal actually mounts/renders on `visible={true}` (check testID + DOM). If PushModal has no data-testid, add `testID=\"push-modal\"` for future testability.",
+    "VERIFY: IndexedDB 'syntax-episode' stores 'latest' + 'keystrokes' populate on every keystroke with Episode ON — could not confirm via playwright automation (keyboard.type didn't reach the hidden TextInput in the highlight-overlay setup). Manual verification recommended.",
+    "MINOR: Replace deprecated `pointerEvents` prop with `style.pointerEvents` on episode-overlay and push-dot Views.",
+    "MINOR: Replace deprecated shadow* styles with `boxShadow` on savedToast style.",
+    "MINOR: In refreshProjects seed path (index.tsx:227-238) also call `settings.setActiveFile(f.id)` so the active-file id persists on first launch (observed active_file storage was null even though a file was active)."
+  ],
+  "critical_code_review_comments": [
+    "FileDrawer.tsx: nesting a controlled Switch inside a Pressable that reuses the same handler causes event double-fire on web. Standard pattern is Pressable→row content with Switch as a sibling that stops its own tap from bubbling.",
+    "app/index.tsx is 1700+ lines — recommend extracting the Editor screen state, Episode integrations, and toast components into separate hooks/components (existing >700 lines guideline)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (frontend-only)", "frontend": "8/11 scenarios pass; 2 confirmed bugs; 1 could-not-verify"},
+  "seed_data_creation": "None (used seeded Welcome/hello.py that the app auto-creates on first launch).",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Test on http://localhost:3000 at 390x844. IMPORTANT: page.keyboard.type() does NOT reliably reach the code-input TextInput on web (transparent overlay setup). Use document.execCommand('insertText', ...) after focusing the element to trigger React Native Web onChangeText. AsyncStorage on web is backed by localStorage — key 'syntax.episode.enabled' stores '1'/'0'. Deleting indexedDB 'syntax-episode' via indexedDB.deleteDatabase before each run gives a clean slate. When testing the Switch: tapping [data-testid=\"episode-switch\"] input is currently a NO-OP due to a double-toggle bug — use [data-testid=\"episode-toggle\"] (the row wrapper) to enable/disable Episode Mode in the meantime.",
+  "rca_of_issue": "Switch double-toggle: The Pressable wrapping the Episode row (FileDrawer.tsx:162) has onPress=toggleEpisode; the Switch inside it (line 176-182) also has onValueChange=toggleEpisode. On RN Web, tapping the Switch fires the native <input> change (→ onValueChange → toggle #1) AND bubbles the click up to the parent Pressable (→ onPress → toggle #2). Two toggles = no net state change. Silent-push fallback: silentGithubPush() correctly calls setShowPush(true) when config is missing, but the modal is not visibly rendered in the DOM — needs to verify PushModal's `visible` prop handling."
+}
