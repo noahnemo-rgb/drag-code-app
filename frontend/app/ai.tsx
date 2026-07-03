@@ -123,6 +123,15 @@ export default function AiScreen() {
     else router.replace("/");
   };
 
+  const applyFixToEditor = async (text: string) => {
+    // Replaces the ENTIRE editor content with the AI's fixed code — the
+    // one-tap "Apply Fix" novice flow triggered from the Why? debugging path.
+    await AsyncStorage.setItem("syntax.pending_replace", text);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    if (router.canGoBack()) router.back();
+    else router.replace("/");
+  };
+
   return (
     <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
       <View style={styles.header}>
@@ -158,7 +167,7 @@ export default function AiScreen() {
             data={messages}
             keyExtractor={(m) => m.id}
             contentContainerStyle={styles.list}
-            renderItem={({ item }) => <MessageBubble msg={item} onCopy={copy} onInsert={insertIntoEditor} />}
+            renderItem={({ item }) => <MessageBubble msg={item} onCopy={copy} onInsert={insertIntoEditor} onApplyFix={applyFixToEditor} />}
             onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
             testID="chat-list"
           />
@@ -197,13 +206,18 @@ function MessageBubble({
   msg,
   onCopy,
   onInsert,
+  onApplyFix,
 }: {
   msg: Msg;
   onCopy: (text: string) => void;
   onInsert: (text: string) => void;
+  onApplyFix: (text: string) => void;
 }) {
   const isUser = msg.role === "user";
   const parts = parseContent(msg.content);
+  // The first code block in an assistant reply is treated as the "canonical fix"
+  // for the one-tap Apply Fix flow.
+  const firstCodeIdx = !isUser ? parts.findIndex((p) => p.kind === "code") : -1;
   return (
     <View style={[styles.bubbleRow, isUser ? styles.bubbleRowRight : styles.bubbleRowLeft]}>
       <View style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble]}>
@@ -213,6 +227,17 @@ function MessageBubble({
               <View style={styles.codeBlockHeader}>
                 <Text style={styles.codeBlockLang}>{p.lang || "code"}</Text>
                 <View style={styles.codeActions}>
+                  {i === firstCodeIdx ? (
+                    <Pressable
+                      onPress={() => onApplyFix(p.text)}
+                      hitSlop={6}
+                      style={styles.applyFixBtn}
+                      testID="apply-fix-btn"
+                    >
+                      <Feather name="zap" size={12} color={COLORS.onBrand} />
+                      <Text style={styles.applyFixLabel}>Apply Fix</Text>
+                    </Pressable>
+                  ) : null}
                   <Pressable
                     onPress={() => onInsert(p.text)}
                     hitSlop={6}
@@ -368,6 +393,16 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   copyBtn: { flexDirection: "row", alignItems: "center", gap: 4, padding: 4 },
+  applyFixBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 4,
+    borderRadius: RADIUS.sm,
+    backgroundColor: COLORS.brand,
+  },
+  applyFixLabel: { color: COLORS.onBrand, fontSize: TEXT.sm - 1, fontWeight: "700" },
   codeActions: { flexDirection: "row", alignItems: "center", gap: SPACING.sm },
   copyLabel: { color: COLORS.onSurfaceSecondary, fontSize: TEXT.sm - 1 },
   codeText: {

@@ -30,6 +30,7 @@ import { settings, SyncMode } from "@/src/lib/storage";
 import { fuzzyScore } from "@/src/lib/fuzzy";
 import { LANGS, inferLang, starterFor } from "@/src/lib/language";
 import { loadMru, pushMru, recencyBonus, sortByMru } from "@/src/lib/mru";
+import { stripMarkdownFences } from "@/src/lib/paste";
 import { BtInfoModal } from "@/src/components/BtInfoModal";
 import { CommandPaletteModal, type PaletteCommand } from "@/src/components/CommandPaletteModal";
 import { FileDrawer } from "@/src/components/FileDrawer";
@@ -83,6 +84,8 @@ export default function EditorScreen() {
   const [showLangMenu, setShowLangMenu] = useState(false);
   const [showBtInfo, setShowBtInfo] = useState(false);
   const [savedToast, setSavedToast] = useState<boolean>(false);
+  const [pasteToast, setPasteToast] = useState<boolean>(false);
+  const prevContentLenRef = useRef<number>(0);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showPush, setShowPush] = useState(false);
   const [showQuickFile, setShowQuickFile] = useState(false);
@@ -353,9 +356,34 @@ export default function EditorScreen() {
     }
   };
 
+  // Editor onChange with automatic Markdown-fence stripping on paste. This lets
+  // users paste code straight from AI chat (```python\n...\n```) and get just
+  // the runnable body inserted into the file.
+  const handleCodeChange = useCallback((next: string) => {
+    const prevLen = prevContentLenRef.current;
+    if (next.length - prevLen > 5 && next.includes("```")) {
+      const cleaned = stripMarkdownFences(next);
+      if (cleaned !== next) {
+        prevContentLenRef.current = cleaned.length;
+        setContent(cleaned);
+        setPasteToast(true);
+        setTimeout(() => setPasteToast(false), 1600);
+        Haptics.selectionAsync();
+        return;
+      }
+    }
+    prevContentLenRef.current = next.length;
+    setContent(next);
+  }, []);
+
+  useEffect(() => {
+    prevContentLenRef.current = content.length;
+  }, [activeFileId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // When returning from AI screen or Snippets, apply any pending "insert at cursor" payload
   // after the file has finished loading (avoid the load overwriting our insertion).
   const pendingInsertRef = useRef<string | null>(null);
+  const pendingReplaceRef = useRef<string | null>(null);
   const loadingRef = useRef<boolean>(true);
   const activeFileIdRef = useRef<string | null>(null);
   useEffect(() => {
@@ -366,10 +394,21 @@ export default function EditorScreen() {
   }, [activeFileId]);
 
   const tryApplyPending = useCallback(() => {
-    const pending = pendingInsertRef.current;
-    if (!pending) return;
     if (loadingRef.current) return;
     if (!activeFileIdRef.current) return;
+    // "Apply Fix" wins over "Insert at cursor" — it replaces the whole file.
+    const replace = pendingReplaceRef.current;
+    if (replace !== null) {
+      pendingReplaceRef.current = null;
+      prevContentLenRef.current = replace.length;
+      setContent(replace);
+      setPasteToast(true);
+      setTimeout(() => setPasteToast(false), 1600);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      return;
+    }
+    const pending = pendingInsertRef.current;
+    if (!pending) return;
     pendingInsertRef.current = null;
     insertAtCursor(pending);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -379,13 +418,19 @@ export default function EditorScreen() {
     useCallback(() => {
       let cancelled = false;
       (async () => {
+        const pendingReplace = await AsyncStorage.getItem("syntax.pending_replace");
+        if (!cancelled && pendingReplace) {
+          await AsyncStorage.removeItem("syntax.pending_replace");
+          // AI may still wrap the "corrected file" in a fence — strip defensively.
+          pendingReplaceRef.current = stripMarkdownFences(pendingReplace);
+        }
         const pending = await AsyncStorage.getItem("syntax.pending_insert");
         if (!cancelled && pending) {
           await AsyncStorage.removeItem("syntax.pending_insert");
           pendingInsertRef.current = pending;
-          // Fires immediately if the file is already loaded (returning from a pushed screen).
-          tryApplyPending();
         }
+        // Fires immediately if the file is already loaded (returning from a pushed screen).
+        tryApplyPending();
       })();
       return () => {
         cancelled = true;
@@ -409,6 +454,40 @@ export default function EditorScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.push("/ai");
   };
+
+  // "Why?" — ships the last terminal output + current code to the AI as an
+  // ELI5 debugging tutor. The response comes back with a fenced fix that the
+  // user can one-tap "Apply" to replace their file with.
+  const askAiAboutOutput = useCallback(async () => {
+    if (!runOutput || !activeFile) return;
+    const combined = [
+      runOutput.stderr ? `STDERR:\n${runOutput.stderr}` : "",
+      runOutput.stdout ? `STDOUT:\n${runOutput.stdout}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n")
+      .slice(0, 4000);
+    const prompt = [
+      "You are a patient, beginner-friendly tutor. The user just ran the code below and got the terminal output that follows. Explain what went wrong (or what the output means) in plain, simple English, like you're talking to a total beginner. Then suggest the exact fix. Keep it concise.",
+      "",
+      `Language: ${activeFile.language}`,
+      "",
+      "--- CODE ---",
+      "```" + activeFile.language,
+      content.slice(0, 4000),
+      "```",
+      "",
+      "--- TERMINAL OUTPUT ---",
+      combined || "(empty output)",
+      "",
+      "Return your reply in this shape:",
+      "1) One-sentence plain-English summary of the problem.",
+      "2) The exact fix — as a single fenced code block containing the full corrected file. Do NOT include prose inside the code block.",
+    ].join("\n");
+    await AsyncStorage.setItem("syntax.pending_prompt", prompt);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    router.push("/ai");
+  }, [runOutput, activeFile, content, router]);
 
   const openBluetoothSettings = async () => {
     Haptics.selectionAsync();
@@ -991,7 +1070,7 @@ export default function EditorScreen() {
                   ref={inputRef}
                   style={styles.input}
                   value={content}
-                  onChangeText={setContent}
+                  onChangeText={handleCodeChange}
                   onSelectionChange={(e: NativeSyntheticEvent<TextInputSelectionChangeEventData>) => {
                     const s = e.nativeEvent.selection;
                     selectionRef.current = s;
@@ -1028,6 +1107,14 @@ export default function EditorScreen() {
           <View style={styles.savedToast} pointerEvents="none" testID="saved-toast">
             <Feather name="check" size={14} color={COLORS.onBrand} />
             <Text style={styles.savedToastLabel}>Saved</Text>
+          </View>
+        ) : null}
+
+        {/* Paste toast (fires when Markdown fences were stripped on paste) */}
+        {pasteToast ? (
+          <View style={[styles.savedToast, { backgroundColor: COLORS.surfaceTertiary, borderWidth: 1, borderColor: COLORS.brand }]} pointerEvents="none" testID="paste-toast">
+            <Feather name="scissors" size={14} color={COLORS.brand} />
+            <Text style={[styles.savedToastLabel, { color: COLORS.brand }]}>Fences stripped</Text>
           </View>
         ) : null}
 
@@ -1091,16 +1178,35 @@ export default function EditorScreen() {
       >
         <View style={styles.sheetHeader}>
           <Text style={styles.sheetTitle}>Console</Text>
-          <Pressable
-            onPress={() => {
-              setRunOutput(null);
-              setPreviewHtml(null);
-            }}
-            hitSlop={8}
-            testID="clear-console-btn"
-          >
-            <Feather name="trash" size={16} color={COLORS.onSurfaceSecondary} />
-          </Pressable>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: SPACING.sm }}>
+            {runOutput && (runOutput.stderr || runOutput.stdout) ? (
+              <Pressable
+                onPress={askAiAboutOutput}
+                style={styles.whyBtn}
+                hitSlop={6}
+                testID="why-btn"
+              >
+                <Feather
+                  name={runOutput.stderr ? "alert-triangle" : "help-circle"}
+                  size={13}
+                  color={COLORS.brand}
+                />
+                <Text style={styles.whyBtnLabel}>
+                  {runOutput.stderr ? "Why?" : "Explain output"}
+                </Text>
+              </Pressable>
+            ) : null}
+            <Pressable
+              onPress={() => {
+                setRunOutput(null);
+                setPreviewHtml(null);
+              }}
+              hitSlop={8}
+              testID="clear-console-btn"
+            >
+              <Feather name="trash" size={16} color={COLORS.onSurfaceSecondary} />
+            </Pressable>
+          </View>
         </View>
         {previewHtml ? (
           <View style={{ flex: 1, backgroundColor: "#ffffff" }} testID="html-preview">
@@ -1256,6 +1362,18 @@ const styles = StyleSheet.create({
     zIndex: 20,
   },
   savedToastLabel: { color: COLORS.onBrand, fontWeight: "700", fontSize: TEXT.sm },
+  whyBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SPACING.xs,
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 6,
+    borderRadius: RADIUS.sm,
+    backgroundColor: COLORS.brandTertiary,
+    borderWidth: 1,
+    borderColor: COLORS.brand,
+  },
+  whyBtnLabel: { color: COLORS.brand, fontWeight: "700", fontSize: TEXT.sm - 1 },
 
   filename: {
     color: COLORS.onSurface,
