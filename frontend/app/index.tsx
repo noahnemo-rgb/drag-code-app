@@ -29,6 +29,7 @@ import { FileItem, Language, Project } from "@/src/lib/api";
 import { highlightLine, PALETTE } from "@/src/lib/highlight";
 import { store } from "@/src/lib/store";
 import { settings, SyncMode } from "@/src/lib/storage";
+import { useEditorShortcuts } from "@/src/hooks/use-editor-shortcuts";
 import { COLORS, FONT, RADIUS, SPACING, TEXT } from "@/src/theme";
 
 const EDITOR_FONT_SIZE = 13;
@@ -102,6 +103,7 @@ export default function EditorScreen() {
   const [newProjectName, setNewProjectName] = useState("");
   const [showLangMenu, setShowLangMenu] = useState(false);
   const [showBtInfo, setShowBtInfo] = useState(false);
+  const [savedToast, setSavedToast] = useState<boolean>(false);
 
   const activeFile = useMemo(() => files.find((f) => f.id === activeFileId) ?? null, [files, activeFileId]);
 
@@ -344,6 +346,32 @@ export default function EditorScreen() {
     await selectProject(p.id);
   };
 
+  // ---- Keyboard shortcuts + hardware-keyboard detection ----
+  const hwKeyboard = useEditorShortcuts({
+    onFind: () => setFindOpen(true),
+    onSave: async () => {
+      if (!activeFile) return;
+      if (content !== savedContent) {
+        await store.updateFile(syncMode, activeFile.id, { content });
+        setSavedContent(content);
+      }
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setSavedToast(true);
+      setTimeout(() => setSavedToast(false), 1200);
+    },
+    onRun: () => {
+      void runCurrent();
+    },
+    onEscape: () => {
+      if (findOpen) closeFind();
+      else if (showLangMenu) setShowLangMenu(false);
+      else if (showNewFile) setShowNewFile(false);
+      else if (showNewProject) setShowNewProject(false);
+      else if (showBtInfo) setShowBtInfo(false);
+    },
+    onAi: () => router.push("/ai"),
+  });
+
   const doCreateFile = async () => {
     if (!activeProjectId) return;
     const name = newFileName.trim();
@@ -498,7 +526,14 @@ export default function EditorScreen() {
           <Text style={styles.filename} numberOfLines={1} testID="active-filename">
             {activeFile?.name ?? "No file"}
           </Text>
-          <Text style={styles.langLabel}>{LANGS.find((l) => l.key === lang)?.label ?? "—"}</Text>
+          <View style={styles.filenameSubRow}>
+            <Text style={styles.langLabel}>{LANGS.find((l) => l.key === lang)?.label ?? "—"}</Text>
+            {hwKeyboard ? (
+              <View style={styles.hwBadge} testID="hw-keyboard-badge">
+                <Text style={styles.hwBadgeLabel}>HW ⌘</Text>
+              </View>
+            ) : null}
+          </View>
         </Pressable>
         <Pressable onPress={() => router.push("/snippets")} style={styles.iconBtn} testID="open-snippets-btn" hitSlop={8}>
           <Feather name="package" size={20} color={COLORS.onSurface} />
@@ -686,6 +721,14 @@ export default function EditorScreen() {
               <Feather name="cpu" size={14} color={COLORS.onBrand} />
               <Text style={styles.explainPillLabel}>Explain with AI</Text>
             </Pressable>
+          </View>
+        ) : null}
+
+        {/* Saved toast (fires on Cmd/Ctrl+S) */}
+        {savedToast ? (
+          <View style={styles.savedToast} pointerEvents="none" testID="saved-toast">
+            <Feather name="check" size={14} color={COLORS.onBrand} />
+            <Text style={styles.savedToastLabel}>Saved</Text>
           </View>
         ) : null}
 
@@ -1057,6 +1100,46 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.md,
   },
   filenameWrap: { flex: 1, alignItems: "center" },
+  filenameSubRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SPACING.sm,
+    marginTop: 1,
+  },
+  hwBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    backgroundColor: COLORS.brandTertiary,
+    borderRadius: RADIUS.sm,
+    borderWidth: 1,
+    borderColor: COLORS.brand,
+  },
+  hwBadgeLabel: {
+    color: COLORS.brand,
+    fontSize: 9,
+    fontFamily: FONT.mono,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+  },
+  savedToast: {
+    position: "absolute",
+    top: SPACING.md,
+    alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SPACING.xs,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    borderRadius: RADIUS.pill,
+    backgroundColor: COLORS.brand,
+    shadowColor: "#000",
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+    zIndex: 20,
+  },
+  savedToastLabel: { color: COLORS.onBrand, fontWeight: "700", fontSize: TEXT.sm },
   filename: {
     color: COLORS.onSurface,
     fontFamily: FONT.mono,
@@ -1065,7 +1148,6 @@ const styles = StyleSheet.create({
   langLabel: {
     color: COLORS.onSurfaceSecondary,
     fontSize: TEXT.sm - 1,
-    marginTop: 1,
   },
   runBtn: {
     flexDirection: "row",
