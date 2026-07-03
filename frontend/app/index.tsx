@@ -79,6 +79,7 @@ export default function EditorScreen() {
   const [content, setContent] = useState<string>("");
   const [savedContent, setSavedContent] = useState<string>("");
   const selectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
+  const [hasSelection, setHasSelection] = useState<boolean>(false);
   const [forcedSelection, setForcedSelection] = useState<{ start: number; end: number } | undefined>(undefined);
   const inputRef = useRef<TextInput>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -242,6 +243,17 @@ export default function EditorScreen() {
       };
     }, []),
   );
+
+  const explainSelection = async () => {
+    if (!activeFile) return;
+    const sel = selectionRef.current;
+    if (sel.end <= sel.start) return;
+    const snippet = content.slice(sel.start, sel.end);
+    const prompt = `Explain what the following ${activeFile.language} code does. Be concise and use bullet points.\n\n\`\`\`${activeFile.language}\n${snippet}\n\`\`\``;
+    await AsyncStorage.setItem("syntax.pending_prompt", prompt);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    router.push("/ai");
+  };
 
   const runCurrent = async () => {
     if (!activeFile) return;
@@ -433,7 +445,9 @@ export default function EditorScreen() {
                   value={content}
                   onChangeText={setContent}
                   onSelectionChange={(e: NativeSyntheticEvent<TextInputSelectionChangeEventData>) => {
-                    selectionRef.current = e.nativeEvent.selection;
+                    const s = e.nativeEvent.selection;
+                    selectionRef.current = s;
+                    setHasSelection(s.end > s.start);
                   }}
                   selection={forcedSelection}
                   multiline
@@ -450,6 +464,16 @@ export default function EditorScreen() {
             </View>
           </ScrollView>
         )}
+
+        {/* Explain selection pill */}
+        {activeFile && hasSelection ? (
+          <View style={styles.explainPillWrap} pointerEvents="box-none">
+            <Pressable onPress={explainSelection} style={styles.explainPill} testID="explain-selection-btn">
+              <Feather name="cpu" size={14} color={COLORS.onBrand} />
+              <Text style={styles.explainPillLabel}>Explain with AI</Text>
+            </Pressable>
+          </View>
+        ) : null}
 
         {/* Symbol strip */}
         {activeFile ? (
@@ -856,6 +880,23 @@ const styles = StyleSheet.create({
     borderTopColor: COLORS.divider,
     backgroundColor: COLORS.surfaceSecondary,
   },
+  explainPillWrap: {
+    alignItems: "center",
+    paddingVertical: SPACING.sm,
+    backgroundColor: COLORS.surface,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.divider,
+  },
+  explainPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SPACING.xs,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    borderRadius: RADIUS.pill,
+    backgroundColor: COLORS.brand,
+  },
+  explainPillLabel: { color: COLORS.onBrand, fontWeight: "700", fontSize: TEXT.sm },
   symbolStripContent: {
     gap: SPACING.xs,
     paddingHorizontal: SPACING.md,

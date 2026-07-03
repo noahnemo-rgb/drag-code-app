@@ -18,6 +18,8 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { api, streamChat } from "@/src/lib/api";
+import { highlightLine } from "@/src/lib/highlight";
+import type { Language } from "@/src/lib/api";
 import { COLORS, FONT, RADIUS, SPACING, TEXT } from "@/src/theme";
 
 interface Msg {
@@ -57,22 +59,27 @@ export default function AiScreen() {
       } catch {
         // no history yet, ignore
       }
+      // Pick up an "Explain with AI" prompt from the editor and auto-send it.
+      const pending = await AsyncStorage.getItem("syntax.pending_prompt");
+      if (pending) {
+        await AsyncStorage.removeItem("syntax.pending_prompt");
+        // Fire-and-forget; state is bound to sid via closure.
+        void sendPrompt(sid, pending);
+      }
     })();
   }, []);
 
-  const send = async () => {
-    const text = input.trim();
-    if (!text || sending || !sessionId) return;
-    const userMsg: Msg = { id: `u-${Date.now()}`, role: "user", content: text };
+  const sendPrompt = async (sid: string, text: string) => {
+    const t = text.trim();
+    if (!t || !sid) return;
+    const userMsg: Msg = { id: `u-${Date.now()}`, role: "user", content: t };
     const aiMsg: Msg = { id: `a-${Date.now()}`, role: "assistant", content: "", pending: true };
     setMessages((m) => [...m, userMsg, aiMsg]);
-    setInput("");
     setSending(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 30);
-
     try {
-      await streamChat(sessionId, text, undefined, (chunk) => {
+      await streamChat(sid, t, undefined, (chunk) => {
         setMessages((m) =>
           m.map((msg) => (msg.id === aiMsg.id ? { ...msg, content: msg.content + chunk } : msg)),
         );
@@ -88,6 +95,14 @@ export default function AiScreen() {
     } finally {
       setSending(false);
     }
+  };
+
+  const send = async () => {
+    if (!sessionId) return;
+    const t = input.trim();
+    if (!t) return;
+    setInput("");
+    await sendPrompt(sessionId, t);
   };
 
   const clear = async () => {
@@ -217,7 +232,7 @@ function MessageBubble({
                   </Pressable>
                 </View>
               </View>
-              <Text style={styles.codeText}>{p.text}</Text>
+              <View style={styles.codeContent}>{renderHighlightedCode(p.text, p.lang)}</View>
             </View>
           ) : (
             <Text key={i} style={[styles.text, isUser && { color: COLORS.onSurface }]}>
@@ -237,6 +252,38 @@ interface Part {
   kind: "text" | "code";
   text: string;
   lang?: string;
+}
+
+const LANG_ALIASES: Record<string, Language> = {
+  js: "javascript",
+  javascript: "javascript",
+  ts: "typescript",
+  typescript: "typescript",
+  py: "python",
+  python: "python",
+  html: "html",
+  htm: "html",
+  css: "css",
+};
+
+function resolveLang(raw: string | undefined): Language {
+  if (!raw) return "javascript";
+  return LANG_ALIASES[raw.toLowerCase()] ?? "javascript";
+}
+
+function renderHighlightedCode(code: string, rawLang: string | undefined): React.ReactNode[] {
+  const lang = resolveLang(rawLang);
+  const lines = code.split("\n");
+  return lines.map((line, i) => (
+    <Text key={i} style={styles.codeText}>
+      {highlightLine(line, lang).map((span, j) => (
+        <Text key={j} style={{ color: span.color }}>
+          {span.text}
+        </Text>
+      ))}
+      {i < lines.length - 1 ? "\n" : ""}
+    </Text>
+  ));
 }
 
 function parseContent(text: string): Part[] {
@@ -326,8 +373,10 @@ const styles = StyleSheet.create({
     color: COLORS.onSurface,
     fontFamily: FONT.mono,
     fontSize: TEXT.sm,
-    padding: SPACING.sm,
     lineHeight: 18,
+  },
+  codeContent: {
+    padding: SPACING.sm,
   },
 
   inputBar: {
