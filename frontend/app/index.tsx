@@ -25,11 +25,11 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { WebView } from "react-native-webview";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-import { FileItem, Language, Project } from "@/src/lib/api";
+import { FileItem, Language, Project, Snippet } from "@/src/lib/api";
 import { highlightLine, PALETTE } from "@/src/lib/highlight";
 import { store } from "@/src/lib/store";
 import { settings, SyncMode } from "@/src/lib/storage";
-import { fuzzyFilter } from "@/src/lib/fuzzy";
+import { fuzzyScore } from "@/src/lib/fuzzy";
 import { useEditorShortcuts } from "@/src/hooks/use-editor-shortcuts";
 import { COLORS, FONT, RADIUS, SPACING, TEXT } from "@/src/theme";
 
@@ -119,17 +119,84 @@ export default function EditorScreen() {
   const [showQuickFile, setShowQuickFile] = useState(false);
   const [quickFileQuery, setQuickFileQuery] = useState("");
   const [quickFileIndex, setQuickFileIndex] = useState(0);
+  const [snippetsCache, setSnippetsCache] = useState<Snippet[]>([]);
 
   const activeFile = useMemo(() => files.find((f) => f.id === activeFileId) ?? null, [files, activeFileId]);
 
-  const quickFileMatches = useMemo(
-    () => fuzzyFilter(quickFileQuery, files, (f) => f.name).slice(0, 30),
-    [files, quickFileQuery],
-  );
+  type QuickResult =
+    | { kind: "file"; file: FileItem; score: number }
+    | { kind: "line"; file: FileItem; line: number; text: string; score: number }
+    | { kind: "snippet"; snippet: Snippet; score: number };
+
+  const quickResults = useMemo<QuickResult[]>(() => {
+    const q = quickFileQuery.trim();
+    // Empty query → just show files (fast + focused)
+    if (!q) {
+      return files.slice(0, 30).map((file) => ({ kind: "file" as const, file, score: 0 }));
+    }
+
+    const results: QuickResult[] = [];
+
+    // 1) File-name fuzzy matches
+    for (const f of files) {
+      const s = fuzzyScore(q, f.name);
+      if (s >= 0) results.push({ kind: "file", file: f, score: s + 20 }); // bias file names higher
+    }
+
+    // 2) File-content substring matches (case-insensitive, per line)
+    const needle = q.toLowerCase();
+    for (const f of files) {
+      if (!f.content) continue;
+      const lines = f.content.split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        const idx = lines[i].toLowerCase().indexOf(needle);
+        if (idx === -1) continue;
+        // Score: base + boundary bonus + shorter-line bonus
+        let score = 30;
+        if (idx === 0 || /[\s({[\-.]/.test(lines[i][idx - 1] ?? "")) score += 5;
+        score += Math.max(0, 15 - Math.floor(lines[i].length / 8));
+        results.push({ kind: "line", file: f, line: i + 1, text: lines[i], score });
+      }
+    }
+
+    // 3) Snippet-title fuzzy matches
+    for (const s of snippetsCache) {
+      const titleScore = fuzzyScore(q, s.title);
+      if (titleScore >= 0) {
+        results.push({ kind: "snippet", snippet: s, score: titleScore + 5 });
+        continue;
+      }
+      // Also consider description / tags
+      const inDesc = s.description && s.description.toLowerCase().includes(needle);
+      const inTags = s.tags?.some((t) => t.toLowerCase().includes(needle));
+      if (inDesc || inTags) {
+        results.push({ kind: "snippet", snippet: s, score: 12 });
+      }
+    }
+
+    return results.sort((a, b) => b.score - a.score).slice(0, 40);
+  }, [files, snippetsCache, quickFileQuery]);
 
   useEffect(() => {
     setQuickFileIndex(0);
   }, [quickFileQuery]);
+
+  // Prefetch snippets when the switcher opens so the palette can search them.
+  useEffect(() => {
+    if (!showQuickFile) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await (await import("@/src/lib/api")).api.listSnippets();
+        if (!cancelled) setSnippetsCache(list);
+      } catch {
+        // network error — palette still works with files only
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showQuickFile]);
 
   // Load projects & restore state on mount
   useEffect(() => {
@@ -253,6 +320,40 @@ export default function EditorScreen() {
       return next;
     });
   };
+
+  const jumpToLineInActiveFile = (line1Based: number) => {
+    // Compute the absolute character offset for the target line in the current content.
+    const lines = content.split("\n");
+    const target = Math.max(0, Math.min(line1Based - 1, lines.length - 1));
+    let offset = 0;
+    for (let i = 0; i < target; i++) offset += lines[i].length + 1;
+    const endOfLine = offset + (lines[target]?.length ?? 0);
+    selectionRef.current = { start: offset, end: endOfLine };
+    setForcedSelection({ start: offset, end: endOfLine });
+    setTimeout(() => setForcedSelection(undefined), 60);
+  };
+
+  const openQuickResult = async (r: QuickResult) => {
+    setShowQuickFile(false);
+    if (r.kind === "file") {
+      await selectFile(r.file.id);
+      return;
+    }
+    if (r.kind === "line") {
+      if (r.file.id !== activeFileId) {
+        await selectFile(r.file.id);
+        setTimeout(() => jumpToLineInActiveFile(r.line), 120);
+      } else {
+        jumpToLineInActiveFile(r.line);
+      }
+      return;
+    }
+    if (r.kind === "snippet") {
+      insertAtCursor(r.snippet.code);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    }
+  };
+
 
   // When returning from AI screen or Snippets, apply any pending "insert at cursor" payload
   // after the file has finished loading (avoid the load overwriting our insertion).
@@ -1099,7 +1200,7 @@ export default function EditorScreen() {
               <TextInput
                 value={quickFileQuery}
                 onChangeText={setQuickFileQuery}
-                placeholder="Type to filter files…"
+                placeholder="Files, content, or snippets…"
                 placeholderTextColor={COLORS.onSurfaceSecondary}
                 style={styles.quickFileInput}
                 autoFocus
@@ -1109,50 +1210,80 @@ export default function EditorScreen() {
                 onKeyPress={(e) => {
                   const k = (e.nativeEvent as { key?: string }).key ?? "";
                   if (k === "ArrowDown") {
-                    setQuickFileIndex((i) => Math.min(i + 1, Math.max(quickFileMatches.length - 1, 0)));
+                    setQuickFileIndex((i) => Math.min(i + 1, Math.max(quickResults.length - 1, 0)));
                   } else if (k === "ArrowUp") {
                     setQuickFileIndex((i) => Math.max(i - 1, 0));
                   } else if (k === "Enter" || k === "Return") {
-                    const pick = quickFileMatches[quickFileIndex];
+                    const pick = quickResults[quickFileIndex];
                     if (pick) {
-                      setShowQuickFile(false);
-                      void selectFile(pick.id);
+                      void openQuickResult(pick);
                     }
                   }
                 }}
               />
-              <Text style={styles.quickFileCount}>
-                {quickFileMatches.length}/{files.length}
-              </Text>
+              <Text style={styles.quickFileCount}>{quickResults.length}</Text>
             </View>
-            <ScrollView style={{ maxHeight: 320 }} keyboardShouldPersistTaps="handled">
-              {quickFileMatches.length === 0 ? (
+            <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled">
+              {quickResults.length === 0 ? (
                 <Text style={styles.emptyMuted}>No matches</Text>
               ) : (
-                quickFileMatches.map((f, i) => {
+                quickResults.map((r, i) => {
                   const isCurrent = i === quickFileIndex;
+                  const key = r.kind === "file"
+                    ? `f-${r.file.id}`
+                    : r.kind === "line"
+                    ? `l-${r.file.id}-${r.line}`
+                    : `s-${r.snippet.id}`;
+                  const tid = r.kind === "file"
+                    ? `quick-file-row-${r.file.id}`
+                    : r.kind === "line"
+                    ? `quick-line-row-${r.file.id}-${r.line}`
+                    : `quick-snippet-row-${r.snippet.id}`;
                   return (
                     <Pressable
-                      key={f.id}
-                      onPress={() => {
-                        setShowQuickFile(false);
-                        void selectFile(f.id);
-                      }}
+                      key={key}
+                      onPress={() => openQuickResult(r)}
                       style={[styles.quickFileRow, isCurrent && styles.quickFileRowActive]}
-                      testID={`quick-file-row-${f.id}`}
+                      testID={tid}
                     >
-                      <Feather
-                        name="file"
-                        size={13}
-                        color={isCurrent ? COLORS.brand : COLORS.onSurfaceSecondary}
-                      />
-                      <Text
-                        style={[styles.quickFileName, isCurrent && { color: COLORS.brand }]}
-                        numberOfLines={1}
-                      >
-                        {f.name}
-                      </Text>
-                      <Text style={styles.quickFileLang}>{f.language}</Text>
+                      <View style={styles.quickKindBadge}>
+                        <Text style={styles.quickKindLabel}>
+                          {r.kind === "file" ? "FILE" : r.kind === "line" ? "LINE" : "SNIP"}
+                        </Text>
+                      </View>
+                      {r.kind === "file" ? (
+                        <>
+                          <Text
+                            style={[styles.quickFileName, isCurrent && { color: COLORS.brand }]}
+                            numberOfLines={1}
+                          >
+                            {r.file.name}
+                          </Text>
+                          <Text style={styles.quickFileLang}>{r.file.language}</Text>
+                        </>
+                      ) : r.kind === "line" ? (
+                        <View style={{ flex: 1, gap: 2 }}>
+                          <Text style={styles.quickLinePath} numberOfLines={1}>
+                            <Text style={[isCurrent && { color: COLORS.brand }]}>{r.file.name}</Text>
+                            <Text style={styles.quickLinePathDim}>:{r.line}</Text>
+                          </Text>
+                          <Text style={styles.quickLineSnippet} numberOfLines={1}>
+                            {r.text.trim().slice(0, 80)}
+                          </Text>
+                        </View>
+                      ) : (
+                        <View style={{ flex: 1, gap: 2 }}>
+                          <Text
+                            style={[styles.quickFileName, isCurrent && { color: COLORS.brand }]}
+                            numberOfLines={1}
+                          >
+                            {r.snippet.title}
+                          </Text>
+                          <Text style={styles.quickLineSnippet} numberOfLines={1}>
+                            by {r.snippet.author} · {r.snippet.language}
+                          </Text>
+                        </View>
+                      )}
                     </Pressable>
                   );
                 })
@@ -1377,6 +1508,36 @@ const styles = StyleSheet.create({
     fontSize: TEXT.sm - 2,
     textTransform: "uppercase",
     letterSpacing: 1,
+  },
+  quickKindBadge: {
+    width: 40,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    borderRadius: RADIUS.sm,
+    backgroundColor: COLORS.surfaceTertiary,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    alignItems: "center",
+  },
+  quickKindLabel: {
+    color: COLORS.onSurfaceSecondary,
+    fontFamily: FONT.mono,
+    fontSize: 9,
+    fontWeight: "700",
+    letterSpacing: 1,
+  },
+  quickLinePath: {
+    fontFamily: FONT.mono,
+    fontSize: TEXT.sm,
+    color: COLORS.onSurface,
+  },
+  quickLinePathDim: {
+    color: COLORS.onSurfaceSecondary,
+  },
+  quickLineSnippet: {
+    fontFamily: FONT.mono,
+    fontSize: TEXT.sm - 1,
+    color: COLORS.onSurfaceSecondary,
   },
   filename: {
     color: COLORS.onSurface,
