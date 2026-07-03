@@ -272,3 +272,15 @@ agent_communication:
     - agent: "testing"
       message: |
         Iteration 9: 13/13 regression checks PASSED. All prior features from iterations 6-8 still work (palettes, RECENT badges, section headers, keyboard nav, Push tabs, long-press filename, Escape close, PromptModal, New File flow). No prop-wiring bugs. Two pre-existing RN-Web deprecation warnings (shadow*, pointerEvents) unrelated to refactor. retest_needed=false.
+    - agent: "main"
+      message: |
+        Iteration 10 (Phase-2 refactor): Extracted 5 more components from app/index.tsx (1889 → 1451 lines).
+          - src/components/NewFileModal.tsx (uses shared Sheet wrapper)
+          - src/components/LangMenu.tsx (uses Sheet)
+          - src/components/BtInfoModal.tsx (uses Sheet)
+          - src/components/ShortcutsSheet.tsx (owns local SHORTCUTS const)
+          - src/components/FileDrawer.tsx (Animated.View + full projects/files/footer)
+        42 now-orphaned styles removed from index.tsx StyleSheet.
+    - agent: "testing"
+      message: |
+        Iteration 10: 14/14 checks PASSED. Drawer, LangMenu, NewFileModal, BtInfoModal, ShortcutsSheet all correctly prop-wired with testIDs intact. All Phase-1 features from iterations 6-9 still work. Only pre-existing RN-Web deprecation warnings carry over. retest_needed=false.
