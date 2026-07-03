@@ -30,7 +30,7 @@ import { highlightLine, PALETTE } from "@/src/lib/highlight";
 import { store } from "@/src/lib/store";
 import { settings, SyncMode } from "@/src/lib/storage";
 import { fuzzyScore, highlightMatches } from "@/src/lib/fuzzy";
-import { loadMru, pushMru, recencyBonus, sortByMru } from "@/src/lib/mru";
+import { isRecent, loadMru, pushMru, recencyBonus, sortByMru } from "@/src/lib/mru";
 import { PushModal } from "@/src/components/PushModal";
 import { useEditorShortcuts } from "@/src/hooks/use-editor-shortcuts";
 import { COLORS, FONT, RADIUS, SPACING, TEXT } from "@/src/theme";
@@ -183,7 +183,14 @@ export default function EditorScreen() {
       }
     }
 
-    return results.sort((a, b) => b.score - a.score).slice(0, 40);
+    return results.sort((a, b) => {
+      // Group by kind first (files > lines > snippets), then by score desc within each group.
+      const rank = (k: QuickResult["kind"]) => (k === "file" ? 0 : k === "line" ? 1 : 2);
+      const ra = rank(a.kind);
+      const rb = rank(b.kind);
+      if (ra !== rb) return ra - rb;
+      return b.score - a.score;
+    }).slice(0, 40);
   }, [files, snippetsCache, quickFileQuery, recentFiles]);
 
   useEffect(() => {
@@ -1446,6 +1453,8 @@ export default function EditorScreen() {
               ) : (
                 quickResults.map((r, i) => {
                   const isCurrent = i === quickFileIndex;
+                  const prevKind = i > 0 ? quickResults[i - 1].kind : null;
+                  const showHeader = r.kind !== prevKind;
                   const key = r.kind === "file"
                     ? `f-${r.file.id}`
                     : r.kind === "line"
@@ -1456,60 +1465,73 @@ export default function EditorScreen() {
                     : r.kind === "line"
                     ? `quick-line-row-${r.file.id}-${r.line}`
                     : `quick-snippet-row-${r.snippet.id}`;
+                  const headerLabel = r.kind === "file" ? "Files" : r.kind === "line" ? "In-file matches" : "Snippets";
+                  const recent = r.kind === "file" && isRecent(recentFiles, r.file.id);
                   return (
-                    <Pressable
-                      key={key}
-                      onPress={() => openQuickResult(r)}
-                      style={[styles.quickFileRow, isCurrent && styles.quickFileRowActive]}
-                      testID={tid}
-                    >
-                      <View style={styles.quickKindBadge}>
-                        <Text style={styles.quickKindLabel}>
-                          {r.kind === "file" ? "FILE" : r.kind === "line" ? "LINE" : "SNIP"}
-                        </Text>
-                      </View>
-                      {r.kind === "file" ? (
-                        <>
-                          <View style={{ flex: 1 }}>
+                    <View key={key}>
+                      {showHeader ? (
+                        <View style={styles.quickSectionHeader} testID={`quick-section-${r.kind}`}>
+                          <Text style={styles.quickSectionHeaderLabel}>{headerLabel}</Text>
+                        </View>
+                      ) : null}
+                      <Pressable
+                        onPress={() => openQuickResult(r)}
+                        style={[styles.quickFileRow, isCurrent && styles.quickFileRowActive]}
+                        testID={tid}
+                      >
+                        <View style={styles.quickKindBadge}>
+                          <Text style={styles.quickKindLabel}>
+                            {r.kind === "file" ? "FILE" : r.kind === "line" ? "LINE" : "SNIP"}
+                          </Text>
+                        </View>
+                        {r.kind === "file" ? (
+                          <>
+                            <View style={{ flex: 1 }}>
+                              <HighlightedText
+                                text={r.file.name}
+                                query={quickFileQuery}
+                                style={[styles.quickFileName, isCurrent && { color: COLORS.brand }]}
+                                hlColor={COLORS.brand}
+                                numberOfLines={1}
+                              />
+                            </View>
+                            {recent ? (
+                              <View style={styles.recentBadge} testID={`quick-file-row-${r.file.id}-recent`}>
+                                <Text style={styles.recentBadgeLabel}>RECENT</Text>
+                              </View>
+                            ) : null}
+                            <Text style={styles.quickFileLang}>{r.file.language}</Text>
+                          </>
+                        ) : r.kind === "line" ? (
+                          <View style={{ flex: 1, gap: 2 }}>
+                            <Text style={styles.quickLinePath} numberOfLines={1}>
+                              <Text style={[isCurrent && { color: COLORS.brand }]}>{r.file.name}</Text>
+                              <Text style={styles.quickLinePathDim}>:{r.line}</Text>
+                            </Text>
                             <HighlightedText
-                              text={r.file.name}
+                              text={r.text.trim().slice(0, 80)}
+                              query={quickFileQuery}
+                              style={styles.quickLineSnippet}
+                              hlColor={COLORS.brand}
+                              numberOfLines={1}
+                            />
+                          </View>
+                        ) : (
+                          <View style={{ flex: 1, gap: 2 }}>
+                            <HighlightedText
+                              text={r.snippet.title}
                               query={quickFileQuery}
                               style={[styles.quickFileName, isCurrent && { color: COLORS.brand }]}
                               hlColor={COLORS.brand}
                               numberOfLines={1}
                             />
+                            <Text style={styles.quickLineSnippet} numberOfLines={1}>
+                              by {r.snippet.author} · {r.snippet.language}
+                            </Text>
                           </View>
-                          <Text style={styles.quickFileLang}>{r.file.language}</Text>
-                        </>
-                      ) : r.kind === "line" ? (
-                        <View style={{ flex: 1, gap: 2 }}>
-                          <Text style={styles.quickLinePath} numberOfLines={1}>
-                            <Text style={[isCurrent && { color: COLORS.brand }]}>{r.file.name}</Text>
-                            <Text style={styles.quickLinePathDim}>:{r.line}</Text>
-                          </Text>
-                          <HighlightedText
-                            text={r.text.trim().slice(0, 80)}
-                            query={quickFileQuery}
-                            style={styles.quickLineSnippet}
-                            hlColor={COLORS.brand}
-                            numberOfLines={1}
-                          />
-                        </View>
-                      ) : (
-                        <View style={{ flex: 1, gap: 2 }}>
-                          <HighlightedText
-                            text={r.snippet.title}
-                            query={quickFileQuery}
-                            style={[styles.quickFileName, isCurrent && { color: COLORS.brand }]}
-                            hlColor={COLORS.brand}
-                            numberOfLines={1}
-                          />
-                          <Text style={styles.quickLineSnippet} numberOfLines={1}>
-                            by {r.snippet.author} · {r.snippet.language}
-                          </Text>
-                        </View>
-                      )}
-                    </Pressable>
+                        )}
+                      </Pressable>
+                    </View>
                   );
                 })
               )}
@@ -1559,6 +1581,7 @@ export default function EditorScreen() {
               ) : (
                 commandMatches.map((c, i) => {
                   const isCurrent = i === commandIndex;
+                  const recent = isRecent(recentCommands, c.id);
                   return (
                     <Pressable
                       key={c.id}
@@ -1583,6 +1606,11 @@ export default function EditorScreen() {
                           {c.hint}
                         </Text>
                       </View>
+                      {recent ? (
+                        <View style={styles.recentBadge} testID={`command-${c.id}-recent`}>
+                          <Text style={styles.recentBadgeLabel}>RECENT</Text>
+                        </View>
+                      ) : null}
                       {c.shortcut ? (
                         <View style={styles.commandShortcut}>
                           <Text style={styles.commandShortcutLabel}>{c.shortcut}</Text>
@@ -1901,6 +1929,33 @@ const styles = StyleSheet.create({
     fontFamily: FONT.mono,
     fontSize: TEXT.sm - 1,
     fontWeight: "600",
+  },
+  recentBadge: {
+    paddingHorizontal: SPACING.sm,
+    paddingVertical: 2,
+    borderRadius: RADIUS.sm,
+    backgroundColor: COLORS.brandTertiary,
+    borderWidth: 1,
+    borderColor: COLORS.brand,
+  },
+  recentBadgeLabel: {
+    color: COLORS.brand,
+    fontFamily: FONT.mono,
+    fontSize: 9,
+    fontWeight: "700",
+    letterSpacing: 1,
+  },
+  quickSectionHeader: {
+    paddingHorizontal: SPACING.md,
+    paddingTop: SPACING.sm,
+    paddingBottom: 4,
+  },
+  quickSectionHeaderLabel: {
+    color: COLORS.onSurfaceSecondary,
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 1.5,
+    textTransform: "uppercase",
   },
   filename: {
     color: COLORS.onSurface,

@@ -31,6 +31,13 @@ export function recencyBonus(mru: string[], id: string, maxBonus = 15): number {
   return Math.round(maxBonus * t);
 }
 
+// True if the id sits in the top `topN` entries of the MRU list (i.e. was used very recently).
+// Used to decorate rows with a "RECENT" badge in palettes.
+export function isRecent(mru: string[], id: string, topN = 5): boolean {
+  const idx = mru.indexOf(id);
+  return idx !== -1 && idx < topN;
+}
+
 // Sort a list of items by MRU rank (newest first), keeping non-MRU items in original order at the end.
 export function sortByMru<T>(items: T[], mru: string[], getId: (item: T) => string): T[] {
   const rank = new Map<string, number>();
