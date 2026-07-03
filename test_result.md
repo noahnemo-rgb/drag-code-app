@@ -233,3 +233,21 @@ agent_communication:
         No backend testing needed – all push logic is client-side.
 
         Test credentials: none required (all tokens are dummy / user-supplied at runtime).
+    - agent: "testing"
+      message: |
+        Iteration 6: 10/13 requirements PASS. 3 gaps reported —
+          1. HIGH: Long-press on filename did not open Command Palette (touch-only users blocked).
+          2. MEDIUM env: Webhook POST to httpbin.org fails on web due to CORS (env limitation, not a bug).
+          3. MEDIUM: Share tab on web showed 'Share is not supported'; suggested clipboard fallback.
+    - agent: "main"
+      message: |
+        Applied two fixes:
+          (1) Added onLongPress + delayLongPress={350} to the filename Pressable so touch users can open the Command Palette by long-pressing the filename.
+          (2) Rewrote shareViaNative() to try navigator.share() first, then fall back to navigator.clipboard.writeText() on web. Return type is now a discriminated union { kind: 'share' | 'clipboard' | 'cancelled' } so PushModal shows a green success message on the clipboard path instead of a red error.
+        Webhook CORS on httpbin is an environment limitation, no code change.
+    - agent: "testing"
+      message: |
+        Iteration 7: Both fixes VERIFIED.
+          - Long-press on filename-lang-picker opens command-palette-modal; 'command-push' entry opens push-modal.
+          - Share tab on web now shows the green clipboard fallback message ('Copied hello.py to clipboard — the Web Share API is unavailable in this browser.') and actually calls navigator.clipboard.writeText with the file content.
+        No new issues. retest_needed=false.
