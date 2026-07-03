@@ -259,3 +259,16 @@ agent_communication:
     - agent: "testing"
       message: |
         Iteration 8: 8/8 checks PASSED. Empty MRU → 0 badges. Top-5 cap validated. Section headers render in the correct order and keyboard nav skips them naturally. Snippet section code path reviewed but not exercised live (no matching snippet in the default project — future improvement). retest_needed=false.
+    - agent: "main"
+      message: |
+        Iteration 9 (Phase-1 refactor): Extracted 6 files from app/index.tsx (2329 → 1889 lines).
+          - src/lib/language.ts (LANGS, EXT_TO_LANG, inferLang, starterFor)
+          - src/components/HighlightedText.tsx
+          - src/components/Sheet.tsx (reusable Modal+backdrop+card wrapper)
+          - src/components/PromptModal.tsx (uses Sheet)
+          - src/components/CommandPaletteModal.tsx (~194 lines, self-contained styles)
+          - src/components/QuickFileSwitcherModal.tsx (~262 lines, self-contained styles)
+        Pure structural change — all testIDs preserved, no UI/UX changes.
+    - agent: "testing"
+      message: |
+        Iteration 9: 13/13 regression checks PASSED. All prior features from iterations 6-8 still work (palettes, RECENT badges, section headers, keyboard nav, Push tabs, long-press filename, Escape close, PromptModal, New File flow). No prop-wiring bugs. Two pre-existing RN-Web deprecation warnings (shadow*, pointerEvents) unrelated to refactor. retest_needed=false.
