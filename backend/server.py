@@ -393,6 +393,15 @@ class SnippetCreate(BaseModel):
     tags: List[str] = Field(default_factory=list)
 
 
+class SnippetUpdate(BaseModel):
+    device_id: str  # author authentication token
+    title: Optional[str] = None
+    description: Optional[str] = None
+    language: Optional[Language] = None
+    code: Optional[str] = None
+    tags: Optional[List[str]] = None
+
+
 class StarRequest(BaseModel):
     device_id: str
 
@@ -458,6 +467,25 @@ async def star_snippet(snippet_id: str, req: StarRequest):
 async def is_starred(snippet_id: str, device_id: str):
     existing = await db.snippet_stars.find_one({"snippet_id": snippet_id, "device_id": device_id})
     return {"starred": existing is not None}
+
+
+@api_router.patch("/snippets/{snippet_id}", response_model=Snippet)
+async def update_snippet(snippet_id: str, payload: SnippetUpdate):
+    doc = await db.snippets.find_one({"id": snippet_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Snippet not found")
+    if doc.get("author_device") != payload.device_id:
+        raise HTTPException(status_code=403, detail="Not allowed")
+    update = {k: v for k, v in payload.model_dump().items() if v is not None and k != "device_id"}
+    if not update:
+        return Snippet(**doc)
+    result = await db.snippets.find_one_and_update(
+        {"id": snippet_id},
+        {"$set": update},
+        return_document=True,
+        projection={"_id": 0},
+    )
+    return Snippet(**result)
 
 
 @api_router.delete("/snippets/{snippet_id}")

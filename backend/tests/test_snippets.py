@@ -123,6 +123,77 @@ class TestSnippets:
         r3 = s.post(f"{API}/snippets/{sid}/star", json={"device_id": TestSnippets.device_b})
         assert r3.json()["stars"] == 2
 
+    def test_patch_updates_fields(self, s):
+        sid = TestSnippets.snippet_id
+        payload = {
+            "device_id": TestSnippets.device_a,
+            "title": "TEST_Fib_v2",
+            "description": "Updated description",
+            "language": "javascript",
+            "code": "console.log('fib');",
+            "tags": ["updated", "js"],
+        }
+        r = s.patch(f"{API}/snippets/{sid}", json=payload)
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert "_id" not in d
+        assert d["id"] == sid
+        assert d["title"] == "TEST_Fib_v2"
+        assert d["description"] == "Updated description"
+        assert d["language"] == "javascript"
+        assert d["code"] == "console.log('fib');"
+        assert d["tags"] == ["updated", "js"]
+        # verify persistence via GET
+        g = s.get(f"{API}/snippets/{sid}")
+        assert g.status_code == 200
+        gj = g.json()
+        assert gj["title"] == "TEST_Fib_v2"
+        assert gj["language"] == "javascript"
+        assert gj["tags"] == ["updated", "js"]
+
+    def test_patch_partial_only_specified_fields(self, s):
+        sid = TestSnippets.snippet_id
+        # Only update title; other fields must remain intact
+        r = s.patch(f"{API}/snippets/{sid}", json={
+            "device_id": TestSnippets.device_a,
+            "title": "TEST_Fib_v3",
+        })
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert d["title"] == "TEST_Fib_v3"
+        # remained from previous patch
+        assert d["language"] == "javascript"
+        assert d["tags"] == ["updated", "js"]
+        assert d["code"] == "console.log('fib');"
+
+    def test_patch_no_fields_is_noop(self, s):
+        sid = TestSnippets.snippet_id
+        before = s.get(f"{API}/snippets/{sid}").json()
+        r = s.patch(f"{API}/snippets/{sid}", json={"device_id": TestSnippets.device_a})
+        assert r.status_code == 200, r.text
+        after = r.json()
+        # All top-level fields identical
+        for k in ("id", "title", "description", "language", "code", "tags", "author", "author_device", "stars", "created_at"):
+            assert before.get(k) == after.get(k), f"field '{k}' changed unexpectedly"
+
+    def test_patch_forbidden_wrong_device(self, s):
+        sid = TestSnippets.snippet_id
+        r = s.patch(f"{API}/snippets/{sid}", json={
+            "device_id": "not-the-author",
+            "title": "hack",
+        })
+        assert r.status_code == 403
+        # ensure title unchanged
+        g = s.get(f"{API}/snippets/{sid}").json()
+        assert g["title"] != "hack"
+
+    def test_patch_unknown_id_returns_404(self, s):
+        r = s.patch(f"{API}/snippets/nonexistent-id-xyz", json={
+            "device_id": TestSnippets.device_a,
+            "title": "whatever",
+        })
+        assert r.status_code == 404
+
     def test_delete_forbidden_wrong_device(self, s):
         sid = TestSnippets.snippet_id
         r = s.delete(f"{API}/snippets/{sid}", params={"device_id": "not-the-author"})

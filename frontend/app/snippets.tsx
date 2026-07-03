@@ -20,7 +20,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { api, FileItem, Language, Snippet } from "@/src/lib/api";
+import { api, FileItem, Language, Snippet, SnippetUpdate } from "@/src/lib/api";
 import { highlightLine } from "@/src/lib/highlight";
 import { local, settings } from "@/src/lib/storage";
 import { store } from "@/src/lib/store";
@@ -58,6 +58,7 @@ export default function SnippetsScreen() {
   // Publish modal
   const [showPublish, setShowPublish] = useState(false);
   const [selected, setSelected] = useState<Snippet | null>(null);
+  const [editing, setEditing] = useState<Snippet | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -261,9 +262,27 @@ export default function SnippetsScreen() {
       <SnippetDetailModal
         snippet={selected}
         starred={selected ? !!starred[selected.id] : false}
+        isMine={!!selected && !!deviceId && selected.author_device === deviceId}
         onClose={() => setSelected(null)}
         onStar={() => selected && toggleStar(selected)}
         onInsert={() => selected && insertIntoEditor(selected)}
+        onEdit={() => {
+          if (selected) {
+            setEditing(selected);
+            setSelected(null);
+          }
+        }}
+      />
+
+      {/* Edit modal (only reachable for own snippets) */}
+      <EditSnippetModal
+        snippet={editing}
+        deviceId={deviceId}
+        onClose={() => setEditing(null)}
+        onSaved={(updated) => {
+          setSnippets((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
+          setEditing(null);
+        }}
       />
     </SafeAreaView>
   );
@@ -363,15 +382,19 @@ function SnippetCard({
 function SnippetDetailModal({
   snippet,
   starred,
+  isMine,
   onClose,
   onStar,
   onInsert,
+  onEdit,
 }: {
   snippet: Snippet | null;
   starred: boolean;
+  isMine: boolean;
   onClose: () => void;
   onStar: () => void;
   onInsert: () => void;
+  onEdit: () => void;
 }) {
   const { height } = useWindowDimensions();
   if (!snippet) return null;
@@ -417,6 +440,12 @@ function SnippetDetailModal({
             ) : null}
           </ScrollView>
           <View style={styles.detailFooter}>
+            {isMine ? (
+              <Pressable onPress={onEdit} style={[styles.secondaryFooterBtn, { marginBottom: SPACING.sm }]} testID="detail-edit-btn">
+                <Feather name="edit-2" size={14} color={COLORS.brand} />
+                <Text style={styles.secondaryFooterLabel}>Edit</Text>
+              </Pressable>
+            ) : null}
             <Pressable onPress={onInsert} style={styles.primaryBtn} testID="detail-insert-btn">
               <Text style={styles.primaryBtnLabel}>Insert at Cursor</Text>
             </Pressable>
@@ -618,6 +647,161 @@ function PublishModal({
                 <ActivityIndicator size="small" color={COLORS.onBrand} />
               ) : (
                 <Text style={styles.primaryBtnLabel}>Publish</Text>
+              )}
+            </Pressable>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+function EditSnippetModal({
+  snippet,
+  deviceId,
+  onClose,
+  onSaved,
+}: {
+  snippet: Snippet | null;
+  deviceId: string;
+  onClose: () => void;
+  onSaved: (s: Snippet) => void;
+}) {
+  const { height } = useWindowDimensions();
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [tagsText, setTagsText] = useState("");
+  const [language, setLanguage] = useState<Language>("javascript");
+  const [code, setCode] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!snippet) return;
+    setTitle(snippet.title);
+    setDescription(snippet.description ?? "");
+    setTagsText((snippet.tags ?? []).join(", "));
+    setLanguage(snippet.language);
+    setCode(snippet.code);
+    setError(null);
+  }, [snippet]);
+
+  if (!snippet) return null;
+
+  const submit = async () => {
+    setError(null);
+    if (!title.trim()) return setError("Title is required.");
+    if (!code.trim()) return setError("Code cannot be empty.");
+    setSubmitting(true);
+    try {
+      const tags = tagsText
+        .split(",")
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0);
+      const payload: SnippetUpdate = {
+        device_id: deviceId,
+        title: title.trim(),
+        description: description.trim(),
+        language,
+        code,
+        tags,
+      };
+      const updated = await api.updateSnippet(snippet.id, payload);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      onSaved(updated);
+    } catch (e: unknown) {
+      setError(String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={[styles.detailBackdrop, { height }]}
+      >
+        <View style={[styles.detailSheet, { maxHeight: "92%" }]} testID="edit-modal">
+          <View style={styles.sheetHeader}>
+            <Text style={styles.sheetTitle}>Edit snippet</Text>
+            <Pressable onPress={onClose} hitSlop={8} testID="close-edit-btn">
+              <Feather name="x" size={20} color={COLORS.onSurface} />
+            </Pressable>
+          </View>
+          <ScrollView contentContainerStyle={styles.formBody} keyboardShouldPersistTaps="handled">
+            <FormField label="Title">
+              <TextInput
+                value={title}
+                onChangeText={setTitle}
+                placeholder="Snippet title"
+                placeholderTextColor={COLORS.onSurfaceSecondary}
+                style={styles.formInput}
+                testID="edit-title"
+              />
+            </FormField>
+            <FormField label="Description">
+              <TextInput
+                value={description}
+                onChangeText={setDescription}
+                placeholder="What does it do?"
+                placeholderTextColor={COLORS.onSurfaceSecondary}
+                style={[styles.formInput, { minHeight: 60 }]}
+                multiline
+                testID="edit-description"
+              />
+            </FormField>
+            <FormField label="Language">
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: SPACING.sm }}>
+                {LANGS.map((l) => (
+                  <Pressable
+                    key={l.key}
+                    onPress={() => setLanguage(l.key)}
+                    style={[styles.chip, language === l.key && styles.chipActive]}
+                    testID={`edit-lang-${l.key}`}
+                  >
+                    <Text style={[styles.chipLabel, language === l.key && { color: COLORS.brand }]}>{l.label}</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </FormField>
+            <FormField label="Tags (comma separated)">
+              <TextInput
+                value={tagsText}
+                onChangeText={setTagsText}
+                placeholder="fetch, async, utility"
+                placeholderTextColor={COLORS.onSurfaceSecondary}
+                style={styles.formInput}
+                autoCapitalize="none"
+                testID="edit-tags"
+              />
+            </FormField>
+            <FormField label="Code">
+              <TextInput
+                value={code}
+                onChangeText={setCode}
+                placeholder="Code…"
+                placeholderTextColor={COLORS.onSurfaceSecondary}
+                style={[styles.formInput, styles.formCode]}
+                multiline
+                autoCapitalize="none"
+                autoCorrect={false}
+                testID="edit-code"
+              />
+            </FormField>
+            {error ? <Text style={styles.errorText}>{error}</Text> : null}
+          </ScrollView>
+          <View style={styles.detailFooter}>
+            <Pressable
+              onPress={submit}
+              disabled={submitting}
+              style={[styles.primaryBtn, submitting && { opacity: 0.5 }]}
+              testID="save-edit-btn"
+            >
+              {submitting ? (
+                <ActivityIndicator size="small" color={COLORS.onBrand} />
+              ) : (
+                <Text style={styles.primaryBtnLabel}>Save changes</Text>
               )}
             </Pressable>
           </View>
@@ -858,6 +1042,19 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   primaryBtnLabel: { color: COLORS.onBrand, fontWeight: "700", fontSize: TEXT.base },
+  secondaryFooterBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: SPACING.xs,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.md,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.brand,
+    backgroundColor: COLORS.brandTertiary,
+  },
+  secondaryFooterLabel: { color: COLORS.brand, fontWeight: "700", fontSize: TEXT.base },
 
   formBody: { padding: SPACING.lg, gap: SPACING.md },
   formLabel: {

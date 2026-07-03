@@ -70,6 +70,8 @@ export const api = {
   },
   createSnippet: (data: SnippetCreate) =>
     j<Snippet>("/snippets", { method: "POST", body: JSON.stringify(data) }),
+  updateSnippet: (id: string, data: SnippetUpdate) =>
+    j<Snippet>(`/snippets/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   starSnippet: (id: string, deviceId: string) =>
     j<Snippet>(`/snippets/${id}/star`, {
       method: "POST",
@@ -101,6 +103,15 @@ export interface SnippetCreate {
   description?: string;
   language: Language;
   code: string;
+  tags?: string[];
+}
+
+export interface SnippetUpdate {
+  device_id: string;
+  title?: string;
+  description?: string;
+  language?: Language;
+  code?: string;
   tags?: string[];
 }
 
