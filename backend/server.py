@@ -255,8 +255,7 @@ async def run_code(payload: RunRequest):
     if lang == "javascript":
         return await _run_subprocess(["node"], code, ".js")
     if lang == "typescript":
-        # Try ts-node/npx tsx if available; else transpile-lite via node with basic strip
-        return await _run_subprocess(["node", "--input-type=module", "-e"], code, ".js") if False else await _run_ts(code)
+        return await _run_ts(code)
     if lang == "html":
         return RunResponse(
             stdout="Preview rendered on-device.",
@@ -275,12 +274,10 @@ async def run_code(payload: RunRequest):
 
 
 async def _run_ts(code: str) -> RunResponse:
-    # naive TS -> JS strip using regex; only supports type-only annotations. For richer, use tsx.
-    # Prefer npx tsx if present.
-    tsx = subprocess.run(["which", "tsx"], capture_output=True, text=True).stdout.strip()
-    if tsx:
-        return await _run_subprocess([tsx], code, ".ts")
-    # Fallback: strip simple TS annotations via node with typescript in-memory (not installed). Just run as JS.
+    """Execute TypeScript via `tsx` if available, else fall back to node (may fail on TS syntax)."""
+    tsx_path = subprocess.run(["which", "tsx"], capture_output=True, text=True).stdout.strip()
+    if tsx_path:
+        return await _run_subprocess([tsx_path], code, ".ts")
     return await _run_subprocess(["node"], code, ".mjs")
 
 

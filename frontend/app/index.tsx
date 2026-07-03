@@ -1,7 +1,7 @@
 import { Feather } from "@expo/vector-icons";
 import { BottomSheetBackdrop, BottomSheetModal, BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import * as Haptics from "expo-haptics";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -9,6 +9,7 @@ import {
   Dimensions,
   KeyboardAvoidingView,
   Modal,
+  NativeSyntheticEvent,
   Platform,
   Pressable,
   ScrollView,
@@ -16,10 +17,12 @@ import {
   Switch,
   Text,
   TextInput,
+  TextInputSelectionChangeEventData,
   View,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { FileItem, Language, Project } from "@/src/lib/api";
 import { highlightLine, PALETTE } from "@/src/lib/highlight";
@@ -75,6 +78,9 @@ export default function EditorScreen() {
   const [activeFileId, setActiveFileId] = useState<string | null>(null);
   const [content, setContent] = useState<string>("");
   const [savedContent, setSavedContent] = useState<string>("");
+  const selectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
+  const [forcedSelection, setForcedSelection] = useState<{ start: number; end: number } | undefined>(undefined);
+  const inputRef = useRef<TextInput>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [running, setRunning] = useState<boolean>(false);
   const [runOutput, setRunOutput] = useState<{ stdout: string; stderr: string; ok: boolean } | null>(null);
@@ -173,6 +179,9 @@ export default function EditorScreen() {
     setActiveFileId(fileId);
     setContent(f?.content ?? "");
     setSavedContent(f?.content ?? "");
+    selectionRef.current = { start: 0, end: 0 };
+    setForcedSelection({ start: 0, end: 0 });
+    setTimeout(() => setForcedSelection(undefined), 50);
     await settings.setActiveFile(fileId);
     closeDrawer();
   }, [activeFile, content, savedContent, syncMode, files]);
@@ -191,15 +200,48 @@ export default function EditorScreen() {
   const openDrawer = () => {
     setDrawerOpen(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    Animated.timing(drawerX, { toValue: 0, duration: 220, useNativeDriver: true }).start();
+    Animated.timing(drawerX, { toValue: 0, duration: 220, useNativeDriver: Platform.OS !== "web" }).start();
   };
   const closeDrawer = () => {
-    Animated.timing(drawerX, { toValue: -drawerWidth, duration: 200, useNativeDriver: true }).start(() => setDrawerOpen(false));
+    Animated.timing(drawerX, { toValue: -drawerWidth, duration: 200, useNativeDriver: Platform.OS !== "web" }).start(() => setDrawerOpen(false));
   };
 
   const insertSymbol = (sym: string) => {
-    setContent((c) => c + sym);
+    insertAtCursor(sym);
   };
+
+  const insertAtCursor = (text: string) => {
+    setContent((c) => {
+      const sel = selectionRef.current;
+      const s = Math.max(0, Math.min(sel.start, c.length));
+      const e = Math.max(s, Math.min(sel.end, c.length));
+      const next = c.slice(0, s) + text + c.slice(e);
+      const newPos = s + text.length;
+      setForcedSelection({ start: newPos, end: newPos });
+      selectionRef.current = { start: newPos, end: newPos };
+      // Release control after applying, so the user can move the cursor freely again.
+      setTimeout(() => setForcedSelection(undefined), 50);
+      return next;
+    });
+  };
+
+  // When returning from AI screen, apply any pending "insert at cursor" payload.
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      (async () => {
+        const pending = await AsyncStorage.getItem("syntax.pending_insert");
+        if (!cancelled && pending) {
+          await AsyncStorage.removeItem("syntax.pending_insert");
+          insertAtCursor(pending);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, []),
+  );
 
   const runCurrent = async () => {
     if (!activeFile) return;
@@ -373,7 +415,7 @@ export default function EditorScreen() {
               </View>
               {/* Editor area with overlay highlight */}
               <View style={styles.editArea}>
-                <View style={styles.highlightLayer} pointerEvents="none">
+                <View style={styles.highlightLayer}>
                   {lines.map((line, i) => (
                     <Text key={i} style={styles.codeLine} allowFontScaling={false}>
                       {highlightLine(line, lang).map((s, j) => (
@@ -386,9 +428,14 @@ export default function EditorScreen() {
                   ))}
                 </View>
                 <TextInput
+                  ref={inputRef}
                   style={styles.input}
                   value={content}
                   onChangeText={setContent}
+                  onSelectionChange={(e: NativeSyntheticEvent<TextInputSelectionChangeEventData>) => {
+                    selectionRef.current = e.nativeEvent.selection;
+                  }}
+                  selection={forcedSelection}
                   multiline
                   autoCorrect={false}
                   autoCapitalize="none"
@@ -786,6 +833,7 @@ const styles = StyleSheet.create({
     top: SPACING.sm,
     left: SPACING.sm,
     right: SPACING.sm,
+    pointerEvents: "none",
   },
   codeLine: {
     fontFamily: FONT.mono,

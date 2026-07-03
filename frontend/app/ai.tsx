@@ -101,6 +101,12 @@ export default function AiScreen() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
+  const insertIntoEditor = async (text: string) => {
+    await AsyncStorage.setItem("syntax.pending_insert", text);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    router.back();
+  };
+
   return (
     <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
       <View style={styles.header}>
@@ -136,7 +142,7 @@ export default function AiScreen() {
             data={messages}
             keyExtractor={(m) => m.id}
             contentContainerStyle={styles.list}
-            renderItem={({ item }) => <MessageBubble msg={item} onCopy={copy} />}
+            renderItem={({ item }) => <MessageBubble msg={item} onCopy={copy} onInsert={insertIntoEditor} />}
             onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
             testID="chat-list"
           />
@@ -171,7 +177,15 @@ export default function AiScreen() {
   );
 }
 
-function MessageBubble({ msg, onCopy }: { msg: Msg; onCopy: (text: string) => void }) {
+function MessageBubble({
+  msg,
+  onCopy,
+  onInsert,
+}: {
+  msg: Msg;
+  onCopy: (text: string) => void;
+  onInsert: (text: string) => void;
+}) {
   const isUser = msg.role === "user";
   const parts = parseContent(msg.content);
   return (
@@ -182,15 +196,26 @@ function MessageBubble({ msg, onCopy }: { msg: Msg; onCopy: (text: string) => vo
             <View key={i} style={styles.codeBlock}>
               <View style={styles.codeBlockHeader}>
                 <Text style={styles.codeBlockLang}>{p.lang || "code"}</Text>
-                <Pressable
-                  onPress={() => onCopy(p.text)}
-                  hitSlop={6}
-                  style={styles.copyBtn}
-                  testID="copy-code-btn"
-                >
-                  <Feather name="copy" size={12} color={COLORS.onSurfaceSecondary} />
-                  <Text style={styles.copyLabel}>Copy</Text>
-                </Pressable>
+                <View style={styles.codeActions}>
+                  <Pressable
+                    onPress={() => onInsert(p.text)}
+                    hitSlop={6}
+                    style={styles.copyBtn}
+                    testID="insert-code-btn"
+                  >
+                    <Feather name="corner-down-left" size={12} color={COLORS.brand} />
+                    <Text style={[styles.copyLabel, { color: COLORS.brand }]}>Insert</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => onCopy(p.text)}
+                    hitSlop={6}
+                    style={styles.copyBtn}
+                    testID="copy-code-btn"
+                  >
+                    <Feather name="copy" size={12} color={COLORS.onSurfaceSecondary} />
+                    <Text style={styles.copyLabel}>Copy</Text>
+                  </Pressable>
+                </View>
               </View>
               <Text style={styles.codeText}>{p.text}</Text>
             </View>
@@ -295,6 +320,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   copyBtn: { flexDirection: "row", alignItems: "center", gap: 4, padding: 4 },
+  codeActions: { flexDirection: "row", alignItems: "center", gap: SPACING.sm },
   copyLabel: { color: COLORS.onSurfaceSecondary, fontSize: TEXT.sm - 1 },
   codeText: {
     color: COLORS.onSurface,
