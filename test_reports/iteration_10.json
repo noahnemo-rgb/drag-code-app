@@ -1,0 +1,30 @@
+{
+  "summary": "Phase-2 structural refactor regression on Expo web preview (390x844). All 14 review-request checks pass. Extracted components — FileDrawer, LangMenu, NewFileModal, BtInfoModal, ShortcutsSheet — are prop-wired correctly with all testIDs preserved. Verified: app loads hello.py, open-drawer-btn slides FileDrawer (testID file-explorer) in via Animated.View, Welcome project renders and is tappable (project-<id>), hello.py + test_p2.py render as file-<id> and are tappable, new-project-btn opens PromptModal (prompt-input), new-file-btn opens NewFileModal (new-file-modal), connect-bt-keyboard-btn on web opens BtInfoModal (bt-info-modal) with 'Got it' (bt-info-ok-btn) closing it, sync-toggle is present, close-drawer-btn closes drawer. Tapping filename opens LangMenu (lang-menu) showing all 5 languages (change-lang-{python,javascript,typescript,html,plaintext}) with Python active; selecting change-lang-javascript updates header label to 'JavaScript'. New File modal shows lang chips (lang-python, lang-javascript…), cancel-new-file closes, confirm-new-file successfully creates 'test_p2.py' and switches to it. Command palette (⇧⌘P) still opens, command-shortcuts item routes to shortcuts-modal with 8 rows and close-shortcuts-btn works. Quick File Switcher (⌘P) and Push modal regressions also pass. No new console errors introduced by refactor — only two pre-existing RN-Web deprecation warnings from iteration 9 still fire (shadow*, props.pointerEvents on styles.savedToast / explainPillWrap / savedToast in index.tsx).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "shadow* style props", "issue": "RN-Web deprecation: 'shadow*' style props are deprecated, use 'boxShadow'. Fires on styles.savedToast. Carry-over from iteration 9. Reference: /app/frontend/app/index.tsx:1251-1254"},
+      {"component": "props.pointerEvents", "issue": "RN-Web deprecation: props.pointerEvents is deprecated; use style.pointerEvents. Fires from <View pointerEvents=\"box-none\"> (explainPillWrap) and <View pointerEvents=\"none\"> (savedToast). Reference: /app/frontend/app/index.tsx:1018,1028"}
+    ]
+  },
+  "test_report_links": ["/app/test_reports/iteration_10.json"],
+  "action_items": [
+    "Nit (unchanged from iter 9): migrate `shadow*` styles to `boxShadow` and `pointerEvents` prop to `style.pointerEvents` on the two remaining wrappers in app/index.tsx to silence RN-Web deprecation warnings.",
+    "index.tsx now 1451 lines (down from 1889 → good progress). Still above 700-line guideline; consider extracting the Run BottomSheet + Find/Replace bar + header row + editor body in Phase 3."
+  ],
+  "critical_code_review_comments": [
+    "FileDrawer.tsx cleanly owns its animated slide-in view; parent still keeps the Animated.Value (drawerX) + drawerWidth, which is correct so open/close animation stays synchronised with useNativeDriver toggling and the drawer width recomputation on window resize.",
+    "All five extracted components use the shared Sheet wrapper — consistent styling and Escape/backdrop close semantics preserved. Sheet correctly renders <Modal transparent animationType='fade'> so testIDs are queryable on the web portal.",
+    "No orphan styles observed in index.tsx post-cleanup — 42 removed styles didn't leave dangling references."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a", "frontend": "100%"},
+  "seed_data_creation": "localStorage.clear() + reload before test to reset state. Created and left one file 'test_p2.py' in the Welcome project as part of the create-flow assertion (belongs to local store only, not persisted server-side).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Phase-2 refactor is stable at 1451 lines. All 14 review-request checks + prior regression items (Command Palette, Quick File Switcher, Push modal) pass on mobile viewport 390x844. testID contract for Phase-2 extracted components: FileDrawer → file-explorer, close-drawer-btn, new-project-btn, new-file-btn, project-<id>, file-<id>, connect-bt-keyboard-btn, sync-toggle; LangMenu → lang-menu, change-lang-<key> (python|javascript|typescript|html|plaintext); NewFileModal → new-file-modal, new-file-name-input, lang-<key>, cancel-new-file, confirm-new-file; BtInfoModal → bt-info-modal, bt-info-ok-btn; ShortcutsSheet → shortcuts-modal, close-shortcuts-btn. Language changes fire immediately in header (langLabel updates without needing a re-tap).",
+  "rca_of_issue": "N/A — no defects observed."
+}

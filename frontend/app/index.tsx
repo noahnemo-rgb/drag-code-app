@@ -9,13 +9,11 @@ import {
   Dimensions,
   KeyboardAvoidingView,
   Linking,
-  Modal,
   NativeSyntheticEvent,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   TextInputSelectionChangeEventData,
@@ -32,10 +30,15 @@ import { settings, SyncMode } from "@/src/lib/storage";
 import { fuzzyScore } from "@/src/lib/fuzzy";
 import { LANGS, inferLang, starterFor } from "@/src/lib/language";
 import { loadMru, pushMru, recencyBonus, sortByMru } from "@/src/lib/mru";
+import { BtInfoModal } from "@/src/components/BtInfoModal";
 import { CommandPaletteModal, type PaletteCommand } from "@/src/components/CommandPaletteModal";
+import { FileDrawer } from "@/src/components/FileDrawer";
+import { LangMenu } from "@/src/components/LangMenu";
+import { NewFileModal } from "@/src/components/NewFileModal";
 import { PromptModal } from "@/src/components/PromptModal";
 import { PushModal } from "@/src/components/PushModal";
 import { QuickFileSwitcherModal, type QuickResult } from "@/src/components/QuickFileSwitcherModal";
+import { ShortcutsSheet } from "@/src/components/ShortcutsSheet";
 import { useEditorShortcuts } from "@/src/hooks/use-editor-shortcuts";
 import { COLORS, FONT, RADIUS, SPACING, TEXT } from "@/src/theme";
 
@@ -44,17 +47,6 @@ const EDITOR_LINE_HEIGHT = 20;
 const GUTTER_WIDTH = 44;
 
 const SYMBOLS = ["{", "}", "(", ")", "[", "]", "<", ">", ";", ":", "=", "+", "-", "*", "/", "\"", "'", "`", ",", ".", "!", "?", "&", "|", "#", "$", "@", "%"];
-
-const SHORTCUTS: { label: string; combo: string }[] = [
-  { label: "Find in file", combo: "⌘ + F" },
-  { label: "Save", combo: "⌘ + S" },
-  { label: "Run", combo: "⌘ + Enter" },
-  { label: "AI assistant", combo: "⌘ + K" },
-  { label: "Quick file switcher", combo: "⌘ + P" },
-  { label: "Command palette", combo: "⇧ + ⌘ + P" },
-  { label: "Shortcuts sheet", combo: "⌘ + /" },
-  { label: "Close overlay", combo: "Esc" },
-];
 
 export default function EditorScreen() {
   const insets = useSafeAreaInsets();
@@ -360,7 +352,6 @@ export default function EditorScreen() {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     }
   };
-
 
   // When returning from AI screen or Snippets, apply any pending "insert at cursor" payload
   // after the file has finished loading (avoid the load overwriting our insertion).
@@ -1067,131 +1058,28 @@ export default function EditorScreen() {
         ) : null}
       </KeyboardAvoidingView>
 
-      {/* Drawer overlay */}
-      {drawerOpen ? (
-        <Pressable style={styles.drawerBackdrop} onPress={closeDrawer} testID="drawer-backdrop" />
-      ) : null}
-      <Animated.View
-        style={[
-          styles.drawer,
-          { width: drawerWidth, transform: [{ translateX: drawerX }], paddingTop: insets.top + SPACING.md, paddingBottom: insets.bottom + SPACING.md },
-        ]}
-        testID="file-explorer"
-      >
-        <View style={styles.drawerHeader}>
-          <Text style={styles.drawerTitle}>Syntax IDE</Text>
-          <Pressable onPress={closeDrawer} style={styles.iconBtn} testID="close-drawer-btn">
-            <Feather name="x" size={20} color={COLORS.onSurface} />
-          </Pressable>
-        </View>
-
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: SPACING.lg }}>
-          <View style={styles.drawerSection}>
-            <View style={styles.drawerSectionHead}>
-              <Text style={styles.drawerSectionTitle}>Projects</Text>
-              <Pressable onPress={() => setShowNewProject(true)} style={styles.ghostBtn} testID="new-project-btn">
-                <Feather name="plus" size={14} color={COLORS.brand} />
-                <Text style={styles.ghostBtnLabel}>New</Text>
-              </Pressable>
-            </View>
-            {projects.map((p) => {
-              const isActive = p.id === activeProjectId;
-              return (
-                <View key={p.id} style={styles.projectRow}>
-                  <Pressable
-                    onPress={() => selectProject(p.id)}
-                    style={[styles.projectItem, isActive && styles.projectItemActive]}
-                    testID={`project-${p.id}`}
-                  >
-                    <Feather name="folder" size={14} color={isActive ? COLORS.brand : COLORS.onSurfaceSecondary} />
-                    <Text style={[styles.projectName, isActive && { color: COLORS.brand }]} numberOfLines={1}>
-                      {p.name}
-                    </Text>
-                  </Pressable>
-                  <Pressable onPress={() => doDeleteProject(p.id)} hitSlop={8} testID={`delete-project-${p.id}`}>
-                    <Feather name="trash-2" size={14} color={COLORS.onSurfaceSecondary} />
-                  </Pressable>
-                </View>
-              );
-            })}
-          </View>
-
-          <View style={styles.drawerSection}>
-            <View style={styles.drawerSectionHead}>
-              <Text style={styles.drawerSectionTitle}>Files</Text>
-              <Pressable
-                onPress={() => setShowNewFile(true)}
-                style={[styles.ghostBtn, !activeProjectId && { opacity: 0.4 }]}
-                disabled={!activeProjectId}
-                testID="new-file-btn"
-              >
-                <Feather name="plus" size={14} color={COLORS.brand} />
-                <Text style={styles.ghostBtnLabel}>New</Text>
-              </Pressable>
-            </View>
-            {files.length === 0 ? (
-              <Text style={styles.emptyMuted}>No files in this project.</Text>
-            ) : (
-              files.map((f) => {
-                const isActive = f.id === activeFileId;
-                return (
-                  <Pressable
-                    key={f.id}
-                    onPress={() => selectFile(f.id)}
-                    style={[styles.fileItem, isActive && styles.fileItemActive]}
-                    testID={`file-${f.id}`}
-                  >
-                    <View style={{ flexDirection: "row", alignItems: "center", flex: 1, gap: SPACING.sm }}>
-                      <Feather name="file" size={13} color={isActive ? COLORS.brand : COLORS.onSurfaceSecondary} />
-                      <Text style={[styles.fileName, isActive && { color: COLORS.brand }]} numberOfLines={1}>
-                        {f.name}
-                      </Text>
-                    </View>
-                    <Pressable onPress={() => doDeleteFile(f.id)} hitSlop={8} testID={`delete-file-${f.id}`}>
-                      <Feather name="trash-2" size={13} color={COLORS.onSurfaceSecondary} />
-                    </Pressable>
-                  </Pressable>
-                );
-              })
-            )}
-          </View>
-        </ScrollView>
-
-        <View style={styles.drawerFooter}>
-          <Pressable
-            onPress={openBluetoothSettings}
-            style={styles.btBtn}
-            testID="connect-bt-keyboard-btn"
-          >
-            <Feather name="bluetooth" size={16} color={COLORS.brand} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.footerLabel}>Bluetooth keyboard</Text>
-              <Text style={styles.footerSub} numberOfLines={1}>
-                {Platform.OS === "android"
-                  ? "Open system Bluetooth settings"
-                  : Platform.OS === "ios"
-                  ? "Open Settings to pair"
-                  : "Mobile only"}
-              </Text>
-            </View>
-            <Feather name="external-link" size={14} color={COLORS.onSurfaceSecondary} />
-          </Pressable>
-
-          <View style={styles.drawerFooterRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.footerLabel}>Sync</Text>
-              <Text style={styles.footerSub}>{syncMode === "cloud" ? "Cloud (MongoDB)" : "Local (device)"}</Text>
-            </View>
-            <Switch
-              value={syncMode === "cloud"}
-              onValueChange={(v) => switchMode(v ? "cloud" : "local")}
-              trackColor={{ true: COLORS.brand, false: COLORS.surfaceTertiary }}
-              thumbColor={COLORS.onSurface}
-              testID="sync-toggle"
-            />
-          </View>
-        </View>
-      </Animated.View>
+      {/* File drawer (projects + files + sync + BT) */}
+      <FileDrawer
+        open={drawerOpen}
+        onClose={closeDrawer}
+        drawerX={drawerX}
+        drawerWidth={drawerWidth}
+        insetTop={insets.top}
+        insetBottom={insets.bottom}
+        projects={projects}
+        activeProjectId={activeProjectId}
+        onSelectProject={selectProject}
+        onDeleteProject={doDeleteProject}
+        onNewProject={() => setShowNewProject(true)}
+        files={files}
+        activeFileId={activeFileId}
+        onSelectFile={selectFile}
+        onDeleteFile={doDeleteFile}
+        onNewFile={() => setShowNewFile(true)}
+        syncMode={syncMode}
+        onSyncModeChange={switchMode}
+        onBluetooth={openBluetoothSettings}
+      />
 
       {/* Run bottom sheet */}
       <BottomSheetModal
@@ -1254,53 +1142,15 @@ export default function EditorScreen() {
       />
 
       {/* New file modal */}
-      <Modal
+      <NewFileModal
         visible={showNewFile}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowNewFile(false)}
-      >
-        <Pressable style={styles.modalBackdrop} onPress={() => setShowNewFile(false)}>
-          <Pressable style={styles.modalCard} onPress={() => {}} testID="new-file-modal">
-            <Text style={styles.modalTitle}>New file</Text>
-            <TextInput
-              value={newFileName}
-              onChangeText={setNewFileName}
-              placeholder="e.g. main.py"
-              placeholderTextColor={COLORS.onSurfaceSecondary}
-              style={styles.modalInput}
-              autoFocus
-              autoCapitalize="none"
-              autoCorrect={false}
-              testID="new-file-name-input"
-            />
-            <Text style={styles.modalLabel}>Language</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: SPACING.sm }}>
-              {LANGS.map((l) => {
-                const active = newFileLang === l.key;
-                return (
-                  <Pressable
-                    key={l.key}
-                    onPress={() => setNewFileLang(l.key)}
-                    style={[styles.chip, active && styles.chipActive]}
-                    testID={`lang-${l.key}`}
-                  >
-                    <Text style={[styles.chipLabel, active && { color: COLORS.brand }]}>{l.label}</Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-            <View style={styles.modalActions}>
-              <Pressable onPress={() => setShowNewFile(false)} style={styles.secondaryBtn} testID="cancel-new-file">
-                <Text style={styles.secondaryBtnLabel}>Cancel</Text>
-              </Pressable>
-              <Pressable onPress={doCreateFile} style={styles.primaryBtn} testID="confirm-new-file">
-                <Text style={styles.primaryBtnLabel}>Create</Text>
-              </Pressable>
-            </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
+        name={newFileName}
+        onNameChange={setNewFileName}
+        lang={newFileLang}
+        onLangChange={setNewFileLang}
+        onCancel={() => setShowNewFile(false)}
+        onCreate={doCreateFile}
+      />
 
       {/* Push modal (GitHub / webhook / share) */}
       <PushModal
@@ -1311,64 +1161,11 @@ export default function EditorScreen() {
         onClose={() => setShowPush(false)}
       />
 
-      {/* Bluetooth-keyboard info modal (shown when we can't deep-link directly, e.g. iOS or web) */}
-      <Modal visible={showBtInfo} transparent animationType="fade" onRequestClose={() => setShowBtInfo(false)}>
-        <Pressable style={styles.modalBackdrop} onPress={() => setShowBtInfo(false)}>
-          <Pressable style={styles.modalCard} onPress={() => {}} testID="bt-info-modal">
-            <Feather name="bluetooth" size={22} color={COLORS.brand} />
-            <Text style={styles.modalTitle}>Pair a Bluetooth keyboard</Text>
-            <Text style={styles.btInfoBody}>
-              {Platform.OS === "ios"
-                ? "iOS doesn't allow apps to open Bluetooth settings directly. Please open the Settings app and go to Bluetooth to pair your keyboard. Once paired, it will work everywhere in Syntax automatically."
-                : Platform.OS === "web"
-                ? "Bluetooth keyboard pairing is only available on physical iOS / Android devices. On desktop, pair via your OS Bluetooth panel."
-                : "We couldn't open your Bluetooth settings automatically. Open your phone's Settings app and go to Bluetooth to pair your keyboard."}
-            </Text>
-            <View style={styles.modalActions}>
-              <Pressable onPress={() => setShowBtInfo(false)} style={styles.primaryBtn} testID="bt-info-ok-btn">
-                <Text style={styles.primaryBtnLabel}>Got it</Text>
-              </Pressable>
-            </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
+      {/* Bluetooth-keyboard info modal */}
+      <BtInfoModal visible={showBtInfo} onClose={() => setShowBtInfo(false)} />
 
       {/* Shortcuts cheat-sheet (⌘/) */}
-      <Modal
-        visible={showShortcuts}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowShortcuts(false)}
-      >
-        <Pressable style={styles.modalBackdrop} onPress={() => setShowShortcuts(false)}>
-          <Pressable style={styles.modalCard} onPress={() => {}} testID="shortcuts-modal">
-            <View style={{ flexDirection: "row", alignItems: "center", gap: SPACING.sm }}>
-              <Feather name="command" size={22} color={COLORS.brand} />
-              <Text style={styles.modalTitle}>Keyboard shortcuts</Text>
-            </View>
-            <View style={{ gap: SPACING.sm }}>
-              {SHORTCUTS.map((s) => (
-                <View key={s.combo} style={styles.shortcutRow}>
-                  <Text style={styles.shortcutLabel}>{s.label}</Text>
-                  <View style={styles.shortcutKeys}>
-                    {s.combo.split("+").map((k, i) => (
-                      <View key={i} style={styles.kbdKey}>
-                        <Text style={styles.kbdKeyLabel}>{k.trim()}</Text>
-                      </View>
-                    ))}
-                  </View>
-                </View>
-              ))}
-            </View>
-            <Text style={styles.shortcutHint}>Tip: On Windows / Linux, use Ctrl instead of ⌘.</Text>
-            <View style={styles.modalActions}>
-              <Pressable onPress={() => setShowShortcuts(false)} style={styles.primaryBtn} testID="close-shortcuts-btn">
-                <Text style={styles.primaryBtnLabel}>Close</Text>
-              </Pressable>
-            </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
+      <ShortcutsSheet visible={showShortcuts} onClose={() => setShowShortcuts(false)} />
 
       {/* Quick file switcher (⌘P) */}
       <QuickFileSwitcherModal
@@ -1396,28 +1193,8 @@ export default function EditorScreen() {
         onRun={runCommand}
       />
 
-      {/* Language picker modal (change lang of active file) */}
-      <Modal visible={showLangMenu} transparent animationType="fade" onRequestClose={() => setShowLangMenu(false)}>
-        <Pressable style={styles.modalBackdrop} onPress={() => setShowLangMenu(false)}>
-          <Pressable style={styles.modalCard} onPress={() => {}} testID="lang-menu">
-            <Text style={styles.modalTitle}>Language</Text>
-            {LANGS.map((l) => {
-              const active = lang === l.key;
-              return (
-                <Pressable
-                  key={l.key}
-                  onPress={() => changeLanguage(l.key)}
-                  style={[styles.langRow, active && { backgroundColor: COLORS.brandTertiary }]}
-                  testID={`change-lang-${l.key}`}
-                >
-                  <Text style={[styles.langRowText, active && { color: COLORS.brand }]}>{l.label}</Text>
-                  {active ? <Feather name="check" size={16} color={COLORS.brand} /> : null}
-                </Pressable>
-              );
-            })}
-          </Pressable>
-        </Pressable>
-      </Modal>
+      {/* Language picker modal */}
+      <LangMenu visible={showLangMenu} current={lang} onSelect={changeLanguage} onClose={() => setShowLangMenu(false)} />
     </SafeAreaView>
   );
 }
@@ -1479,43 +1256,6 @@ const styles = StyleSheet.create({
     zIndex: 20,
   },
   savedToastLabel: { color: COLORS.onBrand, fontWeight: "700", fontSize: TEXT.sm },
-
-  shortcutRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: 6,
-  },
-  shortcutLabel: {
-    color: COLORS.onSurface,
-    fontSize: TEXT.base,
-  },
-  shortcutKeys: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: SPACING.xs,
-  },
-  kbdKey: {
-    minWidth: 24,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: RADIUS.sm,
-    backgroundColor: COLORS.surfaceTertiary,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    alignItems: "center",
-  },
-  kbdKeyLabel: {
-    color: COLORS.onSurface,
-    fontFamily: FONT.mono,
-    fontSize: TEXT.sm - 1,
-    fontWeight: "600",
-  },
-  shortcutHint: {
-    color: COLORS.onSurfaceSecondary,
-    fontSize: TEXT.sm,
-    fontStyle: "italic",
-  },
 
   filename: {
     color: COLORS.onSurface,
@@ -1600,12 +1340,6 @@ const styles = StyleSheet.create({
   centerFill: { flex: 1, alignItems: "center", justifyContent: "center", padding: SPACING.xl, gap: SPACING.md },
   emptyTitle: { color: COLORS.onSurface, fontSize: TEXT.lg, fontWeight: "600" },
   emptySub: { color: COLORS.onSurfaceSecondary, fontSize: TEXT.base, textAlign: "center" },
-  emptyMuted: {
-    color: COLORS.onSurfaceSecondary,
-    fontSize: TEXT.sm,
-    paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.sm,
-  },
 
   editorScroll: { flex: 1, backgroundColor: COLORS.surface },
   editorRow: { flexDirection: "row", minHeight: "100%" },
@@ -1691,114 +1425,6 @@ const styles = StyleSheet.create({
   },
   symbolText: { color: COLORS.onSurface, fontFamily: FONT.mono, fontSize: TEXT.base },
 
-  drawerBackdrop: {
-    position: "absolute",
-    top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: "rgba(0,0,0,0.6)",
-  },
-  drawer: {
-    position: "absolute",
-    top: 0, bottom: 0, left: 0,
-    backgroundColor: COLORS.surfaceSecondary,
-    borderRightWidth: 1,
-    borderRightColor: COLORS.border,
-    paddingHorizontal: SPACING.md,
-  },
-  drawerHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: SPACING.md,
-  },
-  drawerTitle: { color: COLORS.brand, fontSize: TEXT.lg, fontWeight: "700", letterSpacing: 0.5 },
-  drawerSection: { marginTop: SPACING.md },
-  drawerSectionHead: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: SPACING.sm,
-  },
-  drawerSectionTitle: {
-    color: COLORS.onSurfaceSecondary,
-    fontSize: TEXT.sm,
-    fontWeight: "700",
-    letterSpacing: 1,
-    textTransform: "uppercase",
-  },
-  ghostBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: SPACING.xs,
-    paddingHorizontal: SPACING.sm,
-    paddingVertical: 4,
-    borderRadius: RADIUS.sm,
-  },
-  ghostBtnLabel: { color: COLORS.brand, fontSize: TEXT.sm, fontWeight: "700" },
-  projectRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: SPACING.sm,
-    paddingVertical: 2,
-  },
-  projectItem: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: SPACING.sm,
-    paddingHorizontal: SPACING.sm,
-    paddingVertical: SPACING.sm,
-    borderRadius: RADIUS.sm,
-  },
-  projectItemActive: {
-    backgroundColor: COLORS.brandTertiary,
-    borderLeftWidth: 2,
-    borderLeftColor: COLORS.brand,
-  },
-  projectName: { color: COLORS.onSurface, fontSize: TEXT.base, flex: 1 },
-  fileItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: SPACING.sm,
-    paddingVertical: SPACING.sm,
-    borderRadius: RADIUS.sm,
-  },
-  fileItemActive: {
-    backgroundColor: COLORS.brandTertiary,
-    borderLeftWidth: 2,
-    borderLeftColor: COLORS.brand,
-  },
-  fileName: { color: COLORS.onSurface, fontSize: TEXT.sm, fontFamily: FONT.mono, flex: 1 },
-  drawerFooter: {
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-    paddingTop: SPACING.md,
-    marginTop: SPACING.md,
-    gap: SPACING.sm,
-  },
-  drawerFooterRow: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  btBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: SPACING.sm,
-    paddingVertical: SPACING.sm,
-    paddingHorizontal: SPACING.sm,
-    borderRadius: RADIUS.md,
-    backgroundColor: COLORS.brandTertiary,
-    borderWidth: 1,
-    borderColor: COLORS.brand,
-  },
-  btInfoBody: {
-    color: COLORS.onSurfaceSecondary,
-    fontSize: TEXT.base,
-    lineHeight: 22,
-  },
-  footerLabel: { color: COLORS.onSurface, fontWeight: "700", fontSize: TEXT.base },
-  footerSub: { color: COLORS.onSurfaceSecondary, fontSize: TEXT.sm },
-
   sheetHeader: {
     flexDirection: "row",
     alignItems: "center",
@@ -1814,37 +1440,6 @@ const styles = StyleSheet.create({
   consoleErr: { color: COLORS.error, fontFamily: FONT.mono, fontSize: TEXT.sm, lineHeight: 18 },
   consoleMuted: { color: COLORS.onSurfaceSecondary, fontFamily: FONT.mono, fontSize: TEXT.sm },
 
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.7)",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: SPACING.lg,
-  },
-  modalCard: {
-    width: "100%",
-    maxWidth: 400,
-    backgroundColor: COLORS.surfaceSecondary,
-    borderRadius: RADIUS.lg,
-    padding: SPACING.lg,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    gap: SPACING.md,
-  },
-  modalTitle: { color: COLORS.onSurface, fontSize: TEXT.lg, fontWeight: "700" },
-  modalLabel: { color: COLORS.onSurfaceSecondary, fontSize: TEXT.sm, marginTop: SPACING.sm },
-  modalInput: {
-    backgroundColor: COLORS.surface,
-    color: COLORS.onSurface,
-    borderRadius: RADIUS.md,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.sm,
-    fontFamily: FONT.mono,
-    fontSize: TEXT.base,
-  },
-  modalActions: { flexDirection: "row", justifyContent: "flex-end", gap: SPACING.sm, marginTop: SPACING.sm },
   primaryBtn: {
     backgroundColor: COLORS.brand,
     paddingHorizontal: SPACING.lg,
@@ -1852,38 +1447,5 @@ const styles = StyleSheet.create({
     borderRadius: RADIUS.md,
   },
   primaryBtnLabel: { color: COLORS.onBrand, fontWeight: "700", fontSize: TEXT.base },
-  secondaryBtn: {
-    paddingHorizontal: SPACING.lg,
-    paddingVertical: SPACING.sm,
-    borderRadius: RADIUS.md,
-    backgroundColor: COLORS.surfaceTertiary,
-  },
-  secondaryBtnLabel: { color: COLORS.onSurface, fontWeight: "600", fontSize: TEXT.base },
 
-  chip: {
-    paddingHorizontal: SPACING.md,
-    height: 36,
-    borderRadius: RADIUS.pill,
-    backgroundColor: COLORS.surfaceTertiary,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "transparent",
-    flexShrink: 0,
-  },
-  chipActive: {
-    backgroundColor: COLORS.brandTertiary,
-    borderColor: COLORS.brand,
-  },
-  chipLabel: { color: COLORS.onSurface, fontSize: TEXT.sm, fontWeight: "600" },
-
-  langRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.md,
-    borderRadius: RADIUS.md,
-  },
-  langRowText: { color: COLORS.onSurface, fontSize: TEXT.base },
 });
