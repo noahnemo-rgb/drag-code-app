@@ -7,7 +7,7 @@ import time
 import pytest
 import requests
 
-BASE_URL = "https://drag-code-app.preview.emergentagent.com"
+BASE_URL = os.environ.get("SYNTAX_TEST_BASE_URL", "http://localhost:8000")
 API = f"{BASE_URL}/api"
 
 
