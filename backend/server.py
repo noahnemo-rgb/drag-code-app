@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
@@ -14,20 +16,33 @@ from typing import List, Optional, Literal
 import uuid
 from datetime import datetime, timezone
 
-from emergentintegrations.llm.chat import LlmChat, UserMessage, TextDelta, StreamDone
+from google import genai
+from google.genai import types as genai_types
 
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
 mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+db_name = os.environ['DB_NAME']
+client: Optional[AsyncIOMotorClient] = None
+db = None
 
-EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-3.6-flash')
+genai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global client, db
+    client = AsyncIOMotorClient(mongo_url)
+    db = client[db_name]
+    yield
+    client.close()
+
+
+app = FastAPI(lifespan=lifespan)
 api_router = APIRouter(prefix="/api")
 
 # -----------------------------
@@ -294,14 +309,8 @@ SYSTEM_PROMPT = (
 
 @api_router.post("/chat/stream")
 async def chat_stream(payload: ChatRequest):
-    if not EMERGENT_LLM_KEY:
-        raise HTTPException(status_code=500, detail="EMERGENT_LLM_KEY not configured")
-
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=payload.session_id,
-        system_message=SYSTEM_PROMPT,
-    ).with_model("gemini", "gemini-3.1-pro-preview")
+    if not genai_client:
+        raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
 
     user_text = payload.message
     if payload.context_code:
@@ -311,15 +320,36 @@ async def chat_stream(payload: ChatRequest):
             f"User question: {payload.message}"
         )
 
+    # Reconstruct multi-turn context from persisted history (the SDK's client is stateless per call).
+    history_docs = await db.chat_messages.find(
+        {"session_id": payload.session_id}, {"_id": 0}
+    ).sort("created_at", 1).to_list(200)
+    contents = [
+        genai_types.Content(
+            role="model" if d["role"] == "assistant" else "user",
+            parts=[genai_types.Part(text=d["content"])],
+        )
+        for d in history_docs
+    ]
+    contents.append(genai_types.Content(role="user", parts=[genai_types.Part(text=user_text)]))
+    config = genai_types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT)
+
     async def event_gen():
+        full_text_parts: List[str] = []
         try:
-            full_text_parts = []
-            async for ev in chat.stream_message(UserMessage(text=user_text)):
-                if isinstance(ev, TextDelta):
-                    full_text_parts.append(ev.content)
-                    yield ev.content
-                elif isinstance(ev, StreamDone):
-                    break
+            stream = await genai_client.aio.models.generate_content_stream(
+                model=GEMINI_MODEL, contents=contents, config=config,
+            )
+            async for chunk in stream:
+                try:
+                    piece = chunk.text
+                except ValueError:
+                    piece = None
+                if piece:
+                    full_text_parts.append(piece)
+                    yield piece
+            if not full_text_parts:
+                yield "\n[No response generated — the model may have blocked this request.]"
             # persist message + response
             await db.chat_messages.insert_one({
                 "id": str(uuid.uuid4()),
@@ -517,8 +547,3 @@ app.add_middleware(
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
