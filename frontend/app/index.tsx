@@ -32,6 +32,7 @@ import { canUseCloudSync } from "@/src/lib/usage-tiers";
 import { saveEditorContext } from "@/src/lib/editor-context";
 import { highlightLine, PALETTE } from "@/src/lib/highlight";
 import { store } from "@/src/lib/store";
+import { isLoggedIn } from "@/src/lib/auth";
 import { settings, SyncMode } from "@/src/lib/storage";
 import { fuzzyScore } from "@/src/lib/fuzzy";
 import { LANGS, inferLang, starterFor } from "@/src/lib/language";
@@ -265,6 +266,11 @@ export default function EditorScreen() {
 
   const switchMode = useCallback(async (mode: SyncMode) => {
     if (mode === "cloud") {
+      if (!(await isLoggedIn())) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        router.push("/auth");
+        return;
+      }
       const tier = await getTier();
       if (!canUseCloudSync(tier)) {
         Alert.alert(
@@ -278,7 +284,7 @@ export default function EditorScreen() {
     await settings.setSyncMode(mode);
     Haptics.selectionAsync();
     await refreshProjects(mode);
-  }, [refreshProjects]);
+  }, [refreshProjects, router]);
 
   const selectProject = useCallback(async (projectId: string) => {
     setActiveProjectId(projectId);
@@ -800,6 +806,12 @@ export default function EditorScreen() {
         run: () => switchMode(syncMode === "cloud" ? "local" : "cloud"),
       },
       {
+        id: "account",
+        label: "Account / sign in",
+        hint: "JWT session for cloud sync & AI",
+        run: () => router.push("/auth"),
+      },
+      {
         id: "new-file",
         label: "New file…",
         hint: "Create a file in the current project",
@@ -1114,6 +1126,9 @@ export default function EditorScreen() {
             />
           ) : null}
         </View>
+        <Pressable onPress={() => router.push("/auth")} style={styles.iconBtn} testID="open-auth-btn" hitSlop={8}>
+          <Feather name="user" size={20} color={syncMode === "cloud" ? COLORS.brand : COLORS.onSurface} />
+        </Pressable>
         <Pressable onPress={() => router.push("/snippets")} style={styles.iconBtn} testID="open-snippets-btn" hitSlop={8}>
           <Feather name="package" size={20} color={COLORS.onSurface} />
         </Pressable>

@@ -1,5 +1,10 @@
-# Local MongoDB for Syntax IDE cloud sync / chat history / snippets.
+# Syntax IDE local stack: MongoDB + API + dedicated runner.
 #   docker compose up -d
+#
+# Runner mounts the Docker socket so /run can spawn ephemeral
+# network=none containers. Set REQUIRE_DOCKER=false to allow
+# process-sandbox fallback (useful without Docker-in-Docker).
+
 services:
   mongo:
     image: mongo:7
@@ -7,6 +12,50 @@ services:
       - "27017:27017"
     volumes:
       - syntax_mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  runner:
+    build:
+      context: ./backend
+    command: ["uvicorn", "runner_app:app", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      REQUIRE_DOCKER: ${REQUIRE_DOCKER:-true}
+      RUNNER_API_KEY: ${RUNNER_API_KEY:-}
+      RUN_TIMEOUT_SEC: "10"
+    ports:
+      - "8001:8001"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Sibling containers need the host docker group; root is typical for socket access in local compose.
+    group_add:
+      - "0"
+
+  api:
+    build:
+      context: ./backend
+    command: ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+      DB_NAME: syntax_ide
+      JWT_SECRET: ${JWT_SECRET:-dev-syntax-secret-change-me}
+      REQUIRE_AUTH: ${REQUIRE_AUTH:-true}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-4o-mini}
+      RUNNER_URL: http://runner:8001
+      RUNNER_API_KEY: ${RUNNER_API_KEY:-}
+      REQUIRE_DOCKER: "false"
+      CORS_ORIGINS: "*"
+    ports:
+      - "8000:8000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      runner:
+        condition: service_started
 
 volumes:
   syntax_mongo_data:

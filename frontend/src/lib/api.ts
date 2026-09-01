@@ -1,6 +1,14 @@
 import { ApiError, parseApiErrorText } from "./api-errors";
 import { getTier, type Tier } from "./tier-store";
 import { getDeviceId } from "./device-id";
+import {
+  AuthResponse,
+  AuthUser,
+  clearSession,
+  getAccessToken,
+  getAuthUser,
+  setSession,
+} from "./auth";
 
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL ?? "";
 
@@ -30,6 +38,7 @@ export interface RunResult {
   stderr: string;
   exit_code: number;
   duration_ms: number;
+  sandbox?: string;
 }
 
 export interface UsageQuota {
@@ -45,13 +54,15 @@ export interface UsageSnapshot {
 }
 
 async function authHeaders(extra?: HeadersInit): Promise<Record<string, string>> {
-  const [deviceId, tier] = await Promise.all([getDeviceId(), getTier()]);
-  return {
+  const [deviceId, tier, token] = await Promise.all([getDeviceId(), getTier(), getAccessToken()]);
+  const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "X-Device-Id": deviceId,
     "X-Tier": tier,
     ...(extra as Record<string, string> | undefined),
   };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
 }
 
 async function j<T>(path: string, init?: RequestInit): Promise<T> {
@@ -60,6 +71,9 @@ async function j<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers,
   });
+  if (res.status === 401) {
+    await clearSession();
+  }
   if (!res.ok) {
     const text = await res.text();
     const body = parseApiErrorText(text);
@@ -69,6 +83,26 @@ async function j<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  register: async (data: { email: string; password: string; display_name?: string }) => {
+    const res = await j<AuthResponse>("/auth/register", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    await setSession(res);
+    return res;
+  },
+  login: async (data: { email: string; password: string }) => {
+    const res = await j<AuthResponse>("/auth/login", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    await setSession(res);
+    return res;
+  },
+  me: () => j<AuthUser>("/auth/me"),
+  logout: () => clearSession(),
+  getAuthUser,
+
   listProjects: () => j<Project[]>("/projects"),
   createProject: (name: string) =>
     j<Project>("/projects", { method: "POST", body: JSON.stringify({ name }) }),
@@ -88,6 +122,14 @@ export const api = {
 
   getUsage: () => j<UsageSnapshot>("/usage"),
 
+  chatStreamUrl: () => `${BASE}/api/chat/stream`,
+  getChatHistory: (sessionId: string) =>
+    j<{ id: string; session_id: string; role: string; content: string; created_at: string }[]>(
+      `/chat/history/${sessionId}`,
+    ),
+  clearChatHistory: (sessionId: string) =>
+    j<{ ok: boolean }>(`/chat/history/${sessionId}`, { method: "DELETE" }),
+
   listSnippets: (params: { language?: Language; q?: string; mode?: "keyword" | "semantic" } = {}) => {
     const qs = new URLSearchParams();
     if (params.language) qs.set("language", params.language);
@@ -100,20 +142,22 @@ export const api = {
     j<Snippet>("/snippets", { method: "POST", body: JSON.stringify(data) }),
   updateSnippet: (id: string, data: SnippetUpdate) =>
     j<Snippet>(`/snippets/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
-  starSnippet: (id: string, deviceId: string) =>
+  starSnippet: (id: string, deviceId?: string) =>
     j<Snippet>(`/snippets/${id}/star`, {
       method: "POST",
-      body: JSON.stringify({ device_id: deviceId }),
+      body: JSON.stringify(deviceId ? { device_id: deviceId } : {}),
     }),
-  isStarred: (id: string, deviceId: string) =>
-    j<{ starred: boolean }>(`/snippets/${id}/starred?device_id=${encodeURIComponent(deviceId)}`),
-  deleteSnippet: (id: string, deviceId: string) =>
-    j<{ ok: boolean }>(`/snippets/${id}?device_id=${encodeURIComponent(deviceId)}`, { method: "DELETE" }),
+  isStarred: (id: string, deviceId?: string) => {
+    const qs = deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : "";
+    return j<{ starred: boolean }>(`/snippets/${id}/starred${qs}`);
+  },
+  deleteSnippet: (id: string) => j<{ ok: boolean }>(`/snippets/${id}`, { method: "DELETE" }),
 };
 
 export interface Snippet {
   id: string;
   author: string;
+  author_id?: string;
   author_device?: string;
   title: string;
   description: string;
@@ -125,7 +169,7 @@ export interface Snippet {
 }
 
 export interface SnippetCreate {
-  author: string;
+  author?: string;
   author_device?: string;
   title: string;
   description?: string;
@@ -135,10 +179,112 @@ export interface SnippetCreate {
 }
 
 export interface SnippetUpdate {
-  device_id: string;
   title?: string;
   description?: string;
   language?: Language;
   code?: string;
   tags?: string[];
 }
+
+type ChatStreamBody = {
+  session_id: string;
+  message: string;
+  context_code?: string;
+  context_language?: string;
+};
+
+/**
+ * Progressive text streaming via XHR.
+ * React Native's fetch often exposes a null `response.body`, so ReadableStream
+ * readers break on device. XHR `onprogress` works on both RN and web.
+ */
+function streamChatXhr(
+  url: string,
+  body: ChatStreamBody,
+  headers: Record<string, string>,
+  onChunk: (text: string) => void,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    for (const [k, v] of Object.entries(headers)) {
+      xhr.setRequestHeader(k, v);
+    }
+    let last = 0;
+    const emit = () => {
+      const text = xhr.responseText ?? "";
+      if (text.length > last) {
+        const chunk = text.slice(last);
+        last = text.length;
+        onChunk(chunk);
+      }
+    };
+    xhr.onprogress = emit;
+    xhr.onload = () => {
+      emit();
+      const full = xhr.responseText ?? "";
+      if (xhr.status >= 200 && xhr.status < 300) resolve(full);
+      else reject(new Error(`Chat stream failed: ${xhr.status}`));
+    };
+    xhr.onerror = () => reject(new Error("Chat stream network error"));
+    xhr.onabort = () => reject(new Error("Chat stream aborted"));
+    xhr.send(JSON.stringify(body));
+  });
+}
+
+async function streamChatFetch(
+  url: string,
+  body: ChatStreamBody,
+  headers: Record<string, string>,
+  onChunk: (text: string) => void,
+): Promise<string> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`Chat stream failed: ${res.status}`);
+  if (res.body && typeof (res.body as ReadableStream<Uint8Array>).getReader === "function") {
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let full = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+      full += chunk;
+      onChunk(chunk);
+    }
+    return full;
+  }
+  const text = await res.text();
+  if (text) onChunk(text);
+  return text;
+}
+
+export const streamChat = async (
+  sessionId: string,
+  message: string,
+  context: { code?: string; language?: string } | undefined,
+  onChunk: (text: string) => void,
+): Promise<string> => {
+  const url = `${BASE}/api/chat/stream`;
+  const headers = await authHeaders();
+  const body: ChatStreamBody = {
+    session_id: sessionId,
+    message,
+    context_code: context?.code,
+    context_language: context?.language,
+  };
+
+  const isNative = typeof navigator !== "undefined" && (navigator as { product?: string }).product === "ReactNative";
+  if (isNative || typeof XMLHttpRequest !== "undefined") {
+    if (isNative) return streamChatXhr(url, body, headers, onChunk);
+    try {
+      return await streamChatFetch(url, body, headers, onChunk);
+    } catch {
+      return streamChatXhr(url, body, headers, onChunk);
+    }
+  }
+  return streamChatFetch(url, body, headers, onChunk);
+};

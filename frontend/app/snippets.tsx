@@ -22,6 +22,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { api, FileItem, Language, Snippet, SnippetUpdate } from "@/src/lib/api";
 import { friendlyApiMessage } from "@/src/lib/api-errors";
+import { AuthUser, getAuthUser, isLoggedIn } from "@/src/lib/auth";
+import { getDeviceId } from "@/src/lib/device-id";
 import { getTier, type Tier } from "@/src/lib/tier-store";
 import { canUseSemanticSearch } from "@/src/lib/usage-tiers";
 import { highlightLine } from "@/src/lib/highlight";
@@ -29,7 +31,6 @@ import { local, settings } from "@/src/lib/storage";
 import { store } from "@/src/lib/store";
 import { COLORS, FONT, RADIUS, SPACING, TEXT } from "@/src/theme";
 
-const DEVICE_KEY = "syntax.device_id";
 const AUTHOR_KEY = "syntax.author_name";
 
 const LANGS: { key: Language; label: string }[] = [
@@ -40,12 +41,6 @@ const LANGS: { key: Language; label: string }[] = [
   { key: "css", label: "CSS" },
 ];
 
-const uuid = (): string =>
-  "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === "x" ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
 
 export default function SnippetsScreen() {
   const router = useRouter();
@@ -58,6 +53,7 @@ export default function SnippetsScreen() {
   const [tier, setTier] = useState<Tier>("free");
   const [scope, setScope] = useState<"all" | "mine">("all");
   const [deviceId, setDeviceId] = useState<string>("");
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [starred, setStarred] = useState<Record<string, boolean>>({});
 
   // Publish modal
@@ -67,12 +63,9 @@ export default function SnippetsScreen() {
 
   useEffect(() => {
     (async () => {
-      let d = await AsyncStorage.getItem(DEVICE_KEY);
-      if (!d) {
-        d = uuid();
-        await AsyncStorage.setItem(DEVICE_KEY, d);
-      }
+      const d = await getDeviceId();
       setDeviceId(d);
+      setUser(await getAuthUser());
       setTier(await getTier());
       await refresh(langFilter, searchQuery, d, searchMode);
     })();
@@ -80,14 +73,15 @@ export default function SnippetsScreen() {
   }, []);
 
   const hydrateStars = useCallback(async (list: Snippet[], did: string) => {
-    if (!did || list.length === 0) {
+    if (list.length === 0) {
       setStarred({});
       return;
     }
+    const loggedIn = await isLoggedIn();
     const entries = await Promise.all(
       list.map(async (s) => {
         try {
-          const r = await api.isStarred(s.id, did);
+          const r = await api.isStarred(s.id, loggedIn ? undefined : did);
           return [s.id, r.starred] as const;
         } catch {
           return [s.id, false] as const;
@@ -126,6 +120,7 @@ export default function SnippetsScreen() {
   const onRefresh = async () => {
     setRefreshing(true);
     try {
+      setUser(await getAuthUser());
       await refresh(langFilter, searchQuery, deviceId, searchMode);
     } finally {
       setRefreshing(false);
@@ -133,9 +128,10 @@ export default function SnippetsScreen() {
   };
 
   const toggleStar = async (s: Snippet) => {
-    if (!deviceId) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const updated = await api.starSnippet(s.id, deviceId);
+    const loggedIn = await isLoggedIn();
+    if (!loggedIn && !deviceId) return;
+    const updated = await api.starSnippet(s.id, loggedIn ? undefined : deviceId);
     setSnippets((prev) => prev.map((x) => (x.id === s.id ? updated : x)));
     // Server toggles; derive next starred state from previous hydrated map.
     setStarred((prev) => ({ ...prev, [s.id]: !prev[s.id] }));
@@ -150,17 +146,28 @@ export default function SnippetsScreen() {
   };
 
   const visibleSnippets = useMemo(() => {
-    if (scope === "mine" && deviceId) {
-      return snippets.filter((s) => s.author_device === deviceId);
+    if (scope === "mine") {
+      if (user?.id) return snippets.filter((s) => s.author_id === user.id);
+      if (deviceId) return snippets.filter((s) => s.author_device === deviceId);
+      return [];
     }
     return snippets;
-  }, [snippets, scope, deviceId]);
+  }, [snippets, scope, deviceId, user]);
+
+  const isMine = useCallback(
+    (s: Snippet) => Boolean((user?.id && s.author_id === user.id) || (deviceId && s.author_device === deviceId)),
+    [user, deviceId],
+  );
 
   const deleteMine = async (s: Snippet) => {
-    if (!deviceId || s.author_device !== deviceId) return;
+    if (!isMine(s)) return;
+    if (!(await isLoggedIn())) {
+      router.push("/auth");
+      return;
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     try {
-      await api.deleteSnippet(s.id, deviceId);
+      await api.deleteSnippet(s.id);
       setSnippets((prev) => prev.filter((x) => x.id !== s.id));
       if (selected?.id === s.id) setSelected(null);
     } catch {
@@ -183,7 +190,17 @@ export default function SnippetsScreen() {
           <Text style={styles.title}>Snippets</Text>
           <Text style={styles.subtitle}>{filteredNote} • {visibleSnippets.length}</Text>
         </View>
-        <Pressable onPress={() => setShowPublish(true)} style={styles.publishBtn} testID="open-publish-btn">
+        <Pressable
+          onPress={async () => {
+            if (!(await isLoggedIn())) {
+              router.push("/auth");
+              return;
+            }
+            setShowPublish(true);
+          }}
+          style={styles.publishBtn}
+          testID="open-publish-btn"
+        >
           <Feather name="upload" size={14} color={COLORS.onBrand} />
           <Text style={styles.publishBtnLabel}>Publish</Text>
         </Pressable>
@@ -293,7 +310,7 @@ export default function SnippetsScreen() {
             <SnippetCard
               snippet={item}
               starred={!!starred[item.id]}
-              isMine={!!deviceId && item.author_device === deviceId}
+              isMine={isMine(item)}
               onOpen={() => setSelected(item)}
               onStar={() => toggleStar(item)}
               onInsert={() => insertIntoEditor(item)}
@@ -319,7 +336,7 @@ export default function SnippetsScreen() {
       <SnippetDetailModal
         snippet={selected}
         starred={selected ? !!starred[selected.id] : false}
-        isMine={!!selected && !!deviceId && selected.author_device === deviceId}
+        isMine={!!selected && isMine(selected)}
         onClose={() => setSelected(null)}
         onStar={() => selected && toggleStar(selected)}
         onInsert={() => selected && insertIntoEditor(selected)}
@@ -334,7 +351,6 @@ export default function SnippetsScreen() {
       {/* Edit modal (only reachable for own snippets) */}
       <EditSnippetModal
         snippet={editing}
-        deviceId={deviceId}
         onClose={() => setEditing(null)}
         onSaved={(updated) => {
           setSnippets((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
@@ -715,12 +731,10 @@ function PublishModal({
 
 function EditSnippetModal({
   snippet,
-  deviceId,
   onClose,
   onSaved,
 }: {
   snippet: Snippet | null;
-  deviceId: string;
   onClose: () => void;
   onSaved: (s: Snippet) => void;
 }) {
@@ -756,7 +770,6 @@ function EditSnippetModal({
         .map((t) => t.trim())
         .filter((t) => t.length > 0);
       const payload: SnippetUpdate = {
-        device_id: deviceId,
         title: title.trim(),
         description: description.trim(),
         language,

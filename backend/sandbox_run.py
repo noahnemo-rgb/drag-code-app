@@ -1,9 +1,10 @@
-"""Best-effort isolated code execution for /api/run.
+"""Best-effort / Docker-first isolated code execution for Syntax IDE.
 
-Uses a private temp directory, scrubbed env, resource limits (Unix), and a hard
-timeout. If Docker is available, prefers an ephemeral `--network=none` container.
-This is NOT a full multi-tenant sandbox (no seccomp/gVisor), but it is a large
-improvement over bare host subprocesses.
+Modes:
+  - docker: ephemeral `--network=none` container (preferred)
+  - process: private temp dir + scrubbed env + Unix rlimits (dev fallback)
+
+Set require_docker=True (or REQUIRE_DOCKER=true) to refuse process fallback.
 """
 from __future__ import annotations
 
@@ -12,39 +13,47 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_SEC = 10
 MAX_OUTPUT_CHARS = 20_000
-DOCKER_MEMORY = "128m"
-DOCKER_CPUS = "0.5"
+DOCKER_MEMORY = os.environ.get("DOCKER_MEMORY", "128m")
+DOCKER_CPUS = os.environ.get("DOCKER_CPUS", "0.5")
 
 
-def _docker_available() -> bool:
+def _use_docker_sandbox() -> bool:
+    """Prefer Docker when available unless explicitly disabled (e.g. CI)."""
+    pref = os.environ.get("SANDBOX_USE_DOCKER", "auto").lower()
+    if pref in ("0", "false", "no"):
+        return False
+    return docker_available()
+
+
+def docker_available() -> bool:
     if not shutil.which("docker"):
         return False
     try:
-        r = subprocess.run(
-            ["docker", "info"],
-            capture_output=True,
-            timeout=3,
-        )
+        r = subprocess.run(["docker", "info"], capture_output=True, timeout=3)
         return r.returncode == 0
     except Exception:
         return False
 
 
-def _resource_preexec():
-    """Limit CPU time and address space for the child (Unix only)."""
+def _python_bin() -> str:
+    """Interpreter for process sandbox — same binary as the API when possible."""
+    return shutil.which("python3") or shutil.which("python") or sys.executable
+
+
+def _resource_preexec() -> None:
     try:
         import resource
 
-        # 8s CPU, ~256MB address space
         resource.setrlimit(resource.RLIMIT_CPU, (8, 8))
         resource.setrlimit(resource.RLIMIT_AS, (256 * 1024 * 1024, 256 * 1024 * 1024))
         resource.setrlimit(resource.RLIMIT_NPROC, (32, 32))
@@ -55,7 +64,7 @@ def _resource_preexec():
 
 
 def _scrubbed_env(workdir: str) -> dict:
-    path = os.environ.get("PATH", "/usr/bin:/bin")
+    path = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
     return {
         "PATH": path,
         "HOME": workdir,
@@ -73,58 +82,72 @@ async def run_isolated(
     language: str,
     code: str,
     timeout_sec: int = DEFAULT_TIMEOUT_SEC,
-) -> Tuple[str, str, int, int]:
+    require_docker: bool = False,
+) -> Tuple[str, str, int, int, str]:
     """
-    Returns (stdout, stderr, exit_code, duration_ms).
+    Returns (stdout, stderr, exit_code, duration_ms, sandbox_mode).
     """
     start = datetime.now()
+    use_docker = _use_docker_sandbox()
+    if require_docker and not use_docker:
+        return ("", "Docker sandbox required but unavailable.", 503, 0, "unavailable")
+
     work = tempfile.mkdtemp(prefix="syntax-run-")
     try:
         if language == "python":
             script = Path(work) / "main.py"
             script.write_text(code, encoding="utf-8")
-            if _docker_available():
+            if use_docker:
                 cmd = [
                     "docker", "run", "--rm",
                     "--network=none",
                     "--memory", DOCKER_MEMORY,
                     "--cpus", DOCKER_CPUS,
                     "--pids-limit", "64",
+                    "--read-only",
+                    "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m",
                     "-v", f"{work}:/work:ro",
                     "-w", "/work",
+                    "--user", "65534:65534",
                     "python:3.12-alpine",
                     "python", "-I", "main.py",
                 ]
-                return await _exec(cmd, work, timeout_sec, start, use_preexec=False)
-            cmd = ["python3", "-I", str(script)]
-            return await _exec(cmd, work, timeout_sec, start, use_preexec=True)
+                out = await _exec(cmd, work, timeout_sec, start, use_preexec=False)
+                return (*out, "docker")
+            cmd = [_python_bin(), "-I", str(script)]
+            out = await _exec(cmd, work, timeout_sec, start, use_preexec=True)
+            return (*out, "process")
 
         if language == "javascript":
             script = Path(work) / "main.js"
             script.write_text(code, encoding="utf-8")
-            if _docker_available():
+            if use_docker:
                 cmd = [
                     "docker", "run", "--rm",
                     "--network=none",
                     "--memory", DOCKER_MEMORY,
                     "--cpus", DOCKER_CPUS,
                     "--pids-limit", "64",
+                    "--read-only",
+                    "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m",
                     "-v", f"{work}:/work:ro",
                     "-w", "/work",
+                    "--user", "65534:65534",
                     "node:20-alpine",
                     "node", "main.js",
                 ]
-                return await _exec(cmd, work, timeout_sec, start, use_preexec=False)
+                out = await _exec(cmd, work, timeout_sec, start, use_preexec=False)
+                return (*out, "docker")
             cmd = ["node", str(script)]
-            return await _exec(cmd, work, timeout_sec, start, use_preexec=True)
+            out = await _exec(cmd, work, timeout_sec, start, use_preexec=True)
+            return (*out, "process")
 
         if language == "typescript":
             script = Path(work) / "main.ts"
             script.write_text(code, encoding="utf-8")
             tsx = shutil.which("tsx")
-            if _docker_available() and not tsx:
-                # Transpile-less fallback: run via node after stripping isn't great;
-                # prefer host tsx when present. Without tsx, use node on .mjs copy.
+            if use_docker:
+                # Prefer node on a .mjs copy inside alpine (no tsx in stock image).
                 mjs = Path(work) / "main.mjs"
                 mjs.write_text(code, encoding="utf-8")
                 cmd = [
@@ -133,21 +156,26 @@ async def run_isolated(
                     "--memory", DOCKER_MEMORY,
                     "--cpus", DOCKER_CPUS,
                     "--pids-limit", "64",
+                    "--read-only",
+                    "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m",
                     "-v", f"{work}:/work:ro",
                     "-w", "/work",
+                    "--user", "65534:65534",
                     "node:20-alpine",
                     "node", "main.mjs",
                 ]
-                return await _exec(cmd, work, timeout_sec, start, use_preexec=False)
+                out = await _exec(cmd, work, timeout_sec, start, use_preexec=False)
+                return (*out, "docker")
             if tsx:
                 cmd = [tsx, str(script)]
             else:
                 mjs = Path(work) / "main.mjs"
                 mjs.write_text(code, encoding="utf-8")
                 cmd = ["node", str(mjs)]
-            return await _exec(cmd, work, timeout_sec, start, use_preexec=True)
+            out = await _exec(cmd, work, timeout_sec, start, use_preexec=True)
+            return (*out, "process")
 
-        return ("", f"Unsupported language for sandbox: {language}", 1, 0)
+        return ("", f"Unsupported language for sandbox: {language}", 1, 0, "unsupported")
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

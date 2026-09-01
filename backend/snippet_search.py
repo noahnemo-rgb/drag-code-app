@@ -8,6 +8,8 @@ async def ensure_snippet_indexes(db) -> None:
     """Create text index for keyword/semantic-ish search (MongoDB $text)."""
     existing = await db.snippets.index_information()
     if "snippet_text_search" not in existing:
+        # language_override must NOT be "language" — snippets use that field for
+        # programming language (python/javascript/...), which is not a Mongo text locale.
         await db.snippets.create_index(
             [
                 ("title", "text"),
@@ -17,6 +19,7 @@ async def ensure_snippet_indexes(db) -> None:
             ],
             name="snippet_text_search",
             default_language="english",
+            language_override="search_language",
         )
 
 
