@@ -16,11 +16,13 @@ export function FileDrawer({
   activeProjectId,
   onSelectProject,
   onDeleteProject,
+  onRenameProject,
   onNewProject,
   files,
   activeFileId,
   onSelectFile,
   onDeleteFile,
+  onRenameFile,
   onNewFile,
   syncMode,
   onSyncModeChange,
@@ -36,22 +38,23 @@ export function FileDrawer({
   activeProjectId: string | null;
   onSelectProject: (id: string) => void;
   onDeleteProject: (id: string) => void;
+  onRenameProject: (id: string) => void;
   onNewProject: () => void;
   files: FileItem[];
   activeFileId: string | null;
   onSelectFile: (id: string) => void;
   onDeleteFile: (id: string) => void;
+  onRenameFile: (id: string) => void;
   onNewFile: () => void;
   syncMode: SyncMode;
   onSyncModeChange: (m: SyncMode) => void;
   onBluetooth: () => void;
 }) {
   const { enabled: episodeEnabled, toggle: toggleEpisode } = useEpisodeMode();
+
   return (
     <>
-      {open ? (
-        <Pressable style={styles.backdrop} onPress={onClose} testID="drawer-backdrop" />
-      ) : null}
+      {open ? <Pressable style={styles.backdrop} onPress={onClose} testID="drawer-backdrop" /> : null}
       <Animated.View
         style={[
           styles.drawer,
@@ -94,6 +97,9 @@ export function FileDrawer({
                       {p.name}
                     </Text>
                   </Pressable>
+                  <Pressable onPress={() => onRenameProject(p.id)} hitSlop={8} testID={`rename-project-${p.id}`}>
+                    <Feather name="edit-2" size={14} color={COLORS.onSurfaceSecondary} />
+                  </Pressable>
                   <Pressable onPress={() => onDeleteProject(p.id)} hitSlop={8} testID={`delete-project-${p.id}`}>
                     <Feather name="trash-2" size={14} color={COLORS.onSurfaceSecondary} />
                   </Pressable>
@@ -121,22 +127,24 @@ export function FileDrawer({
               files.map((f) => {
                 const isActive = f.id === activeFileId;
                 return (
-                  <Pressable
-                    key={f.id}
-                    onPress={() => onSelectFile(f.id)}
-                    style={[styles.fileItem, isActive && styles.fileItemActive]}
-                    testID={`file-${f.id}`}
-                  >
-                    <View style={{ flexDirection: "row", alignItems: "center", flex: 1, gap: SPACING.sm }}>
+                  <View key={f.id} style={styles.fileRow}>
+                    <Pressable
+                      onPress={() => onSelectFile(f.id)}
+                      style={[styles.fileItem, isActive && styles.fileItemActive]}
+                      testID={`file-${f.id}`}
+                    >
                       <Feather name="file" size={13} color={isActive ? COLORS.brand : COLORS.onSurfaceSecondary} />
                       <Text style={[styles.fileName, isActive && { color: COLORS.brand }]} numberOfLines={1}>
                         {f.name}
                       </Text>
-                    </View>
+                    </Pressable>
+                    <Pressable onPress={() => onRenameFile(f.id)} hitSlop={8} testID={`rename-file-${f.id}`}>
+                      <Feather name="edit-2" size={13} color={COLORS.onSurfaceSecondary} />
+                    </Pressable>
                     <Pressable onPress={() => onDeleteFile(f.id)} hitSlop={8} testID={`delete-file-${f.id}`}>
                       <Feather name="trash-2" size={13} color={COLORS.onSurfaceSecondary} />
                     </Pressable>
-                  </Pressable>
+                  </View>
                 );
               })
             )}
@@ -152,8 +160,8 @@ export function FileDrawer({
                 {Platform.OS === "android"
                   ? "Open system Bluetooth settings"
                   : Platform.OS === "ios"
-                  ? "Open Settings to pair"
-                  : "Mobile only"}
+                    ? "Open Settings to pair"
+                    : "Mobile only"}
               </Text>
             </View>
             <Feather name="external-link" size={14} color={COLORS.onSurfaceSecondary} />
@@ -207,12 +215,17 @@ export function FileDrawer({
 const styles = StyleSheet.create({
   backdrop: {
     position: "absolute",
-    top: 0, left: 0, right: 0, bottom: 0,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     backgroundColor: "rgba(0,0,0,0.6)",
   },
   drawer: {
     position: "absolute",
-    top: 0, bottom: 0, left: 0,
+    top: 0,
+    bottom: 0,
+    left: 0,
     backgroundColor: COLORS.surfaceSecondary,
     borderRightWidth: 1,
     borderRightColor: COLORS.border,
@@ -261,10 +274,12 @@ const styles = StyleSheet.create({
   },
   projectItemActive: { backgroundColor: COLORS.brandTertiary, borderLeftWidth: 2, borderLeftColor: COLORS.brand },
   projectName: { color: COLORS.onSurface, fontSize: TEXT.base, flex: 1 },
+  fileRow: { flexDirection: "row", alignItems: "center", gap: SPACING.sm, paddingVertical: 2 },
   fileItem: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    gap: SPACING.sm,
     paddingHorizontal: SPACING.sm,
     paddingVertical: SPACING.sm,
     borderRadius: RADIUS.sm,

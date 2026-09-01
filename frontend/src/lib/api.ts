@@ -1,3 +1,5 @@
+import { getDeviceId } from "./device-id";
+
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL ?? "";
 
 export type Language = "javascript" | "typescript" | "python" | "html" | "css";
@@ -5,6 +7,7 @@ export type Language = "javascript" | "typescript" | "python" | "html" | "css";
 export interface Project {
   id: string;
   name: string;
+  owner_id?: string;
   created_at: string;
   updated_at: string;
 }
@@ -15,6 +18,7 @@ export interface FileItem {
   name: string;
   language: Language;
   content: string;
+  owner_id?: string;
   created_at: string;
   updated_at: string;
 }
@@ -26,10 +30,20 @@ export interface RunResult {
   duration_ms: number;
 }
 
+async function authHeaders(extra?: HeadersInit): Promise<Record<string, string>> {
+  const deviceId = await getDeviceId();
+  return {
+    "Content-Type": "application/json",
+    "X-Device-Id": deviceId,
+    ...(extra as Record<string, string> | undefined),
+  };
+}
+
 async function j<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = await authHeaders(init?.headers);
   const res = await fetch(`${BASE}/api${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    headers,
   });
   if (!res.ok) throw new Error(`API ${path} ${res.status}: ${await res.text()}`);
   return (await res.json()) as T;
@@ -127,11 +141,18 @@ type ChatStreamBody = {
  * React Native's fetch often exposes a null `response.body`, so ReadableStream
  * readers break on device. XHR `onprogress` works on both RN and web.
  */
-function streamChatXhr(url: string, body: ChatStreamBody, onChunk: (text: string) => void): Promise<string> {
+function streamChatXhr(
+  url: string,
+  body: ChatStreamBody,
+  headers: Record<string, string>,
+  onChunk: (text: string) => void,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", url);
-    xhr.setRequestHeader("Content-Type", "application/json");
+    for (const [k, v] of Object.entries(headers)) {
+      xhr.setRequestHeader(k, v);
+    }
     let last = 0;
     const emit = () => {
       const text = xhr.responseText ?? "";
@@ -154,10 +175,15 @@ function streamChatXhr(url: string, body: ChatStreamBody, onChunk: (text: string
   });
 }
 
-async function streamChatFetch(url: string, body: ChatStreamBody, onChunk: (text: string) => void): Promise<string> {
+async function streamChatFetch(
+  url: string,
+  body: ChatStreamBody,
+  headers: Record<string, string>,
+  onChunk: (text: string) => void,
+): Promise<string> {
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`Chat stream failed: ${res.status}`);
@@ -187,6 +213,7 @@ export const streamChat = async (
   onChunk: (text: string) => void,
 ): Promise<string> => {
   const url = `${BASE}/api/chat/stream`;
+  const headers = await authHeaders();
   const body: ChatStreamBody = {
     session_id: sessionId,
     message,
@@ -198,12 +225,12 @@ export const streamChat = async (
   // first and fall back to XHR if the body reader is missing or throws.
   const isNative = typeof navigator !== "undefined" && (navigator as { product?: string }).product === "ReactNative";
   if (isNative || typeof XMLHttpRequest !== "undefined") {
-    if (isNative) return streamChatXhr(url, body, onChunk);
+    if (isNative) return streamChatXhr(url, body, headers, onChunk);
     try {
-      return await streamChatFetch(url, body, onChunk);
+      return await streamChatFetch(url, body, headers, onChunk);
     } catch {
-      return streamChatXhr(url, body, onChunk);
+      return streamChatXhr(url, body, headers, onChunk);
     }
   }
-  return streamChatFetch(url, body, onChunk);
+  return streamChatFetch(url, body, headers, onChunk);
 };

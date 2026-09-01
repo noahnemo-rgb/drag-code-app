@@ -1,12 +1,12 @@
 # Syntax Mobile IDE
 
-A React Native / Expo mobile IDE with a FastAPI backend: multi-file editor, code runner, Gemini AI assistant, and a snippets marketplace.
+A React Native / Expo mobile IDE with a FastAPI backend: multi-file editor, sandboxed code runner, OpenRouter AI assistant, and a snippets marketplace.
 
 ## Prerequisites
 
 - Node.js 20+ and Yarn 1.x
 - Python 3.11+
-- Docker (optional, for local MongoDB)
+- Docker (optional, for local MongoDB and stronger `/api/run` isolation)
 - For `/api/run`: `python3`, `node`, and preferably a global `tsx` (`npm i -g tsx`)
 
 ## Quick start
@@ -18,7 +18,7 @@ cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env
 ```
 
-Edit `backend/.env` and set `EMERGENT_LLM_KEY` if you want AI chat. Edit `frontend/.env` if the API is not on `http://localhost:8000`.
+Edit `backend/.env` and set `OPENROUTER_API_KEY` (and optionally `OPENROUTER_MODEL`). Edit `frontend/.env` if the API is not on `http://localhost:8000`.
 
 ### 2. MongoDB
 
@@ -38,7 +38,7 @@ pip install -r requirements.txt
 uvicorn server:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Health check: `GET http://localhost:8000/api/` → `{ "message": "Syntax Mobile IDE API" }`.
+Health check: `GET http://localhost:8000/api/` → includes `chat_provider: "openrouter"`.
 
 ### 4. Frontend
 
@@ -48,27 +48,24 @@ yarn install
 yarn start
 ```
 
-Then open in Expo Go, an emulator, or press `w` for web. The app calls `${EXPO_PUBLIC_BACKEND_URL}/api/...`.
+Then open in Expo Go, an emulator, or press `w` for web. The app calls `${EXPO_PUBLIC_BACKEND_URL}/api/...` and sends `X-Device-Id` for cloud tenant isolation.
 
 ## Architecture
 
 | Layer | Stack |
 |-------|--------|
-| App | Expo 54 / React Native / expo-router |
+| App | Expo / React Native / expo-router |
 | API | FastAPI + Motor (MongoDB) |
-| AI | Emergent Integrations → Gemini (`gemini-3.1-pro-preview`) |
-| Runner | Host subprocesses (`python3` / `node` / `tsx`) with a 10s timeout |
+| AI | OpenRouter (`OPENROUTER_MODEL`, default `openai/gpt-4o-mini`) |
+| Runner | Isolated temp dir + resource limits; Docker `--network=none` when available |
 
-Projects and files can sync **local** (AsyncStorage) or **cloud** (MongoDB). Chat, snippets, and `/run` always use the API.
+Projects and files can sync **local** (AsyncStorage) or **cloud** (MongoDB, scoped by `X-Device-Id`). Chat, snippets, and `/run` always use the API.
 
 ## Known production gaps
 
-These are intentional follow-ups, not covered by the quick start:
-
-- `/api/run` is **not sandboxed** — do not expose a public runner without isolation.
-- Cloud projects/files/chat have **no user auth** yet.
-- Snippet authorship is device-id based (client-supplied), not real accounts.
-- `emergentintegrations` may not be on public PyPI; use the Emergent-provided environment or wheel.
+- `/api/run` isolation is best-effort (temp dir + rlimits / optional Docker). Prefer a dedicated sandbox host for public deploys.
+- Device-id tenancy is not cryptographic auth — sufficient for single-user installs, not multi-user accounts.
+- Snippet authorship remains device-id based.
 
 ## Tests
 
@@ -76,5 +73,3 @@ These are intentional follow-ups, not covered by the quick start:
 cd backend
 pytest tests/ -v
 ```
-
-Backend tests historically targeted a hosted preview URL; prefer a local API + Mongo when iterating.
