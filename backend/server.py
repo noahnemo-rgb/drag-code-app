@@ -211,6 +211,7 @@ async def delete_file(file_id: str):
 # -----------------------------
 
 RUN_TIMEOUT_SEC = 10
+MAX_RUN_CODE_CHARS = 100_000
 
 
 async def _run_subprocess(cmd: List[str], code: str, suffix: str) -> RunResponse:
@@ -250,6 +251,11 @@ async def _run_subprocess(cmd: List[str], code: str, suffix: str) -> RunResponse
 async def run_code(payload: RunRequest):
     lang = payload.language
     code = payload.code
+    if len(code) > MAX_RUN_CODE_CHARS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Code exceeds maximum length of {MAX_RUN_CODE_CHARS} characters",
+        )
     if lang == "python":
         return await _run_subprocess(["python3"], code, ".py")
     if lang == "javascript":
@@ -410,6 +416,8 @@ class StarRequest(BaseModel):
 async def create_snippet(payload: SnippetCreate):
     if not payload.title.strip() or not payload.code.strip():
         raise HTTPException(status_code=400, detail="title and code are required")
+    if not (payload.author_device or "").strip():
+        raise HTTPException(status_code=400, detail="author_device is required")
     s = Snippet(**payload.model_dump())
     await db.snippets.insert_one(s.model_dump())
     return s
@@ -441,6 +449,9 @@ async def get_snippet(snippet_id: str):
 @api_router.post("/snippets/{snippet_id}/star", response_model=Snippet)
 async def star_snippet(snippet_id: str, req: StarRequest):
     # Idempotent star: track (snippet_id, device_id) pairs; toggle count accordingly.
+    doc = await db.snippets.find_one({"id": snippet_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Snippet not found")
     existing = await db.snippet_stars.find_one({"snippet_id": snippet_id, "device_id": req.device_id})
     if existing:
         await db.snippet_stars.delete_one({"snippet_id": snippet_id, "device_id": req.device_id})
@@ -493,8 +504,8 @@ async def delete_snippet(snippet_id: str, device_id: str):
     doc = await db.snippets.find_one({"id": snippet_id}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="Snippet not found")
-    # Only the original author (matched by device_id-derived author key) can delete.
-    if doc.get("author_device") and doc["author_device"] != device_id:
+    # Author-only: require an exact device match (missing author_device ⇒ deny).
+    if not doc.get("author_device") or doc["author_device"] != device_id:
         raise HTTPException(status_code=403, detail="Not allowed")
     await db.snippets.delete_one({"id": snippet_id})
     await db.snippet_stars.delete_many({"snippet_id": snippet_id})

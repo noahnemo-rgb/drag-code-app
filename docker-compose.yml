@@ -1,0 +1,12 @@
+# Local MongoDB for Syntax IDE cloud sync / chat history / snippets.
+#   docker compose up -d
+services:
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - syntax_mongo_data:/data/db
+
+volumes:
+  syntax_mongo_data:
