@@ -6,6 +6,7 @@ import * as ScreenOrientation from "expo-screen-orientation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   Dimensions,
   KeyboardAvoidingView,
@@ -25,6 +26,9 @@ import { WebView } from "react-native-webview";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { FileItem, Language, Project, Snippet } from "@/src/lib/api";
+import { friendlyApiMessage } from "@/src/lib/api-errors";
+import { getTier } from "@/src/lib/tier-store";
+import { canUseCloudSync } from "@/src/lib/usage-tiers";
 import { saveEditorContext } from "@/src/lib/editor-context";
 import { highlightLine, PALETTE } from "@/src/lib/highlight";
 import { store } from "@/src/lib/store";
@@ -260,6 +264,16 @@ export default function EditorScreen() {
   }, []);
 
   const switchMode = useCallback(async (mode: SyncMode) => {
+    if (mode === "cloud") {
+      const tier = await getTier();
+      if (!canUseCloudSync(tier)) {
+        Alert.alert(
+          "Cloud sync is a Pro feature",
+          "Free tier keeps projects on this device only. Open Plan & usage in the drawer to try Pro (dev toggle), or stay on local storage.",
+        );
+        return;
+      }
+    }
     setSyncMode(mode);
     await settings.setSyncMode(mode);
     Haptics.selectionAsync();
@@ -630,7 +644,7 @@ export default function EditorScreen() {
         setRunOutput({ stdout: res.stdout, stderr: res.stderr, ok: res.exit_code === 0 });
       }
     } catch (e: unknown) {
-      setRunOutput({ stdout: "", stderr: String(e), ok: false });
+      setRunOutput({ stdout: "", stderr: friendlyApiMessage(e), ok: false });
     } finally {
       setRunning(false);
     }
