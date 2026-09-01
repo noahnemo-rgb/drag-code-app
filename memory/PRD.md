@@ -1,13 +1,13 @@
 # Syntax Mobile IDE — Product Requirements
 
 ## Overview
-A React Native / Expo mobile IDE app that lets users code within a GUI. Dark utility aesthetic (Amber on Obsidian), monospaced editor, quick-symbol keyboard strip, drawer-based file explorer, code runner console, and multi-turn Gemini 3 Pro AI assistant.
+A React Native / Expo mobile IDE app that lets users code within a GUI. Dark utility aesthetic (Amber on Obsidian), monospaced editor, quick-symbol keyboard strip, drawer-based file explorer, code runner console, and multi-turn OpenRouter AI assistant.
 
 ## Core Features
 - **Multi-file editor** — Projects → Files, create/rename/delete, autosave. Syntax highlighting for JavaScript, TypeScript, Python, HTML, CSS. Line numbers, monospace font, quick-symbol strip.
 - **Find & Replace** — In-editor toolbar (search icon in header) with find input, live match counter (`N/M`), Aa case toggle, prev/next chevrons, single Replace, Replace All, and a close button.
 - **Code runner** — Executes Python/JS/TS on the FastAPI backend. TS uses globally-installed `tsx`. HTML preview rendered on-device via WebView. Output shown in a bottom-sheet Console. 10s timeout.
-- **AI Assistant (Gemini 3 Pro / `gemini-3.1-pro-preview`)** — Multi-turn chat with streaming responses, session persistence, and code blocks that are **syntax-highlighted with the same tokenizer as the editor** and carry both Copy and Insert-at-Cursor actions.
+- **AI Assistant (OpenRouter)** — Multi-turn chat via OpenRouter’s OpenAI-compatible API (`OPENROUTER_MODEL`, default `openai/gpt-4o-mini`) with streaming responses, session persistence, and code blocks that are **syntax-highlighted with the same tokenizer as the editor** and carry both Copy and Insert-at-Cursor actions.
 - **Explain Selection** — Selecting text in the editor reveals an amber "Explain with AI" pill above the symbol strip; tapping it navigates to the AI screen with an auto-composed, auto-sent prompt.
 - **Snippets Marketplace** — Public feed of code snippets. Publish (author, title, description, language, tags, code — prefilled from the active file), browse with language chips & search, star (idempotent per-device), tap to view detail with syntax-highlighted code, Insert-at-Cursor into the editor. **MINE tab** filters to snippets you posted with a delete affordance. **Edit** button on your own snippet's detail sheet opens a prefilled form that PATCHes the snippet server-side (author-only).
 - **Local vs Cloud storage** — Toggle in file explorer drawer (AsyncStorage vs MongoDB).
@@ -37,5 +37,6 @@ A React Native / Expo mobile IDE app that lets users code within a GUI. Dark uti
 Add a **Snippets Marketplace** where users publish saved AI-generated snippets to a public feed — increases retention and creates viral loops with copy-to-clipboard sharing.
 
 ## Notes
-- EMERGENT_LLM_KEY configured in backend/.env.
+- OPENROUTER_API_KEY configured in backend/.env (plus optional OPENROUTER_MODEL).
 - TypeScript execution falls back to Node (annotations must be JS-compatible unless `tsx` is on PATH).
+- Cloud projects/files/chat are scoped by the `X-Device-Id` header.

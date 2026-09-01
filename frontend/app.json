@@ -1,24 +1,24 @@
 {
   "expo": {
-    "name": "frontend",
-    "slug": "frontend",
+    "name": "Syntax IDE",
+    "slug": "syntax-ide",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "frontend",
-    "userInterfaceStyle": "automatic",
+    "scheme": "syntax",
+    "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.emergent.dragcodeapp.eepquz"
+      "bundleIdentifier": "com.syntax.ide"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#000000"
+        "backgroundColor": "#111111"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.emergent.dragcodeapp.eepquz"
+      "package": "com.syntax.ide"
     },
     "web": {
       "bundler": "metro",
@@ -33,7 +33,7 @@
           "image": "./assets/images/splash-image.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#000000"
+          "backgroundColor": "#111111"
         }
       ],
       "expo-secure-store"

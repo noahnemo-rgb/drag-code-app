@@ -100,7 +100,7 @@ export default function AiScreen() {
     } catch (e: unknown) {
       setMessages((m) =>
         m.map((msg) =>
-          msg.id === aiMsg.id ? { ...msg, content: `[Error contacting Gemini: ${String(e)}]`, pending: false } : msg,
+          msg.id === aiMsg.id ? { ...msg, content: `[Error contacting OpenRouter: ${String(e)}]`, pending: false } : msg,
         ),
       );
     } finally {
@@ -151,7 +151,7 @@ export default function AiScreen() {
         </Pressable>
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>AI Assistant</Text>
-          <Text style={styles.subtitle}>Gemini 3 Pro</Text>
+          <Text style={styles.subtitle}>OpenRouter</Text>
           {editorCtx ? (
             <Text style={styles.contextHint} numberOfLines={1} testID="ai-context-hint">
               Using {editorCtx.name || "current file"} ({editorCtx.language})
@@ -172,7 +172,7 @@ export default function AiScreen() {
             <View style={styles.emptyIcon}>
               <Feather name="cpu" size={28} color={COLORS.brand} />
             </View>
-            <Text style={styles.emptyTitle}>How can Gemini assist your code today?</Text>
+            <Text style={styles.emptyTitle}>How can I help with your code today?</Text>
             <Text style={styles.emptySub}>
               Ask about syntax, request code, or explain what a snippet does.
             </Text>
@@ -193,7 +193,7 @@ export default function AiScreen() {
           <TextInput
             value={input}
             onChangeText={setInput}
-            placeholder="Ask Gemini…"
+            placeholder="Ask Syntax…"
             placeholderTextColor={COLORS.onSurfaceSecondary}
             style={styles.input}
             multiline

@@ -86,6 +86,8 @@ export default function EditorScreen() {
   const [newFileName, setNewFileName] = useState("");
   const [newFileLang, setNewFileLang] = useState<Language>("javascript");
   const [newProjectName, setNewProjectName] = useState("");
+  const [renameTarget, setRenameTarget] = useState<null | { kind: "project" | "file"; id: string; name: string }>(null);
+  const [renameValue, setRenameValue] = useState("");
   const [showLangMenu, setShowLangMenu] = useState(false);
   const [showBtInfo, setShowBtInfo] = useState(false);
   const [savedToast, setSavedToast] = useState<boolean>(false);
@@ -671,6 +673,10 @@ export default function EditorScreen() {
       else if (showLangMenu) setShowLangMenu(false);
       else if (showNewFile) setShowNewFile(false);
       else if (showNewProject) setShowNewProject(false);
+      else if (renameTarget) {
+        setRenameTarget(null);
+        setRenameValue("");
+      }
       else if (showBtInfo) setShowBtInfo(false);
     },
     onAi: () => {
@@ -747,7 +753,7 @@ export default function EditorScreen() {
       {
         id: "ai",
         label: "Open AI assistant",
-        hint: "Chat with Gemini",
+        hint: "Chat with OpenRouter",
         shortcut: "⌘ K",
         run: () => {
           if (activeFile) {
@@ -904,6 +910,46 @@ export default function EditorScreen() {
         setContent("");
       }
     }
+  };
+
+  const beginRenameProject = (id: string) => {
+    const p = projects.find((x) => x.id === id);
+    if (!p) return;
+    setRenameTarget({ kind: "project", id, name: p.name });
+    setRenameValue(p.name);
+  };
+
+  const beginRenameFile = (id: string) => {
+    const f = files.find((x) => x.id === id);
+    if (!f) return;
+    setRenameTarget({ kind: "file", id, name: f.name });
+    setRenameValue(f.name);
+  };
+
+  const confirmRename = async () => {
+    if (!renameTarget) return;
+    const next = renameValue.trim();
+    if (!next || next === renameTarget.name) {
+      setRenameTarget(null);
+      setRenameValue("");
+      return;
+    }
+    if (renameTarget.kind === "project") {
+      await store.renameProject(syncMode, renameTarget.id, next);
+      setProjects((prev) => prev.map((p) => (p.id === renameTarget.id ? { ...p, name: next } : p)));
+    } else {
+      const lang = inferLang(next);
+      const patch: { name: string; language?: Language } = { name: next };
+      if (lang) patch.language = lang;
+      await store.updateFile(syncMode, renameTarget.id, patch);
+      setFiles((prev) =>
+        prev
+          .map((f) => (f.id === renameTarget.id ? { ...f, ...patch } : f))
+          .sort((a, b) => a.name.localeCompare(b.name)),
+      );
+    }
+    setRenameTarget(null);
+    setRenameValue("");
   };
 
   const changeLanguage = async (lang: Language) => {
@@ -1312,11 +1358,13 @@ export default function EditorScreen() {
         activeProjectId={activeProjectId}
         onSelectProject={selectProject}
         onDeleteProject={doDeleteProject}
+        onRenameProject={beginRenameProject}
         onNewProject={() => setShowNewProject(true)}
         files={files}
         activeFileId={activeFileId}
         onSelectFile={selectFile}
         onDeleteFile={doDeleteFile}
+        onRenameFile={beginRenameFile}
         onNewFile={() => setShowNewFile(true)}
         syncMode={syncMode}
         onSyncModeChange={switchMode}
@@ -1400,6 +1448,21 @@ export default function EditorScreen() {
         onConfirm={doCreateProject}
         confirmLabel="Create"
         testID="new-project-modal"
+      />
+
+      <PromptModal
+        visible={!!renameTarget}
+        title={renameTarget?.kind === "project" ? "Rename project" : "Rename file"}
+        placeholder={renameTarget?.kind === "project" ? "Project name" : "filename.ext"}
+        value={renameValue}
+        onChange={setRenameValue}
+        onCancel={() => {
+          setRenameTarget(null);
+          setRenameValue("");
+        }}
+        onConfirm={confirmRename}
+        confirmLabel="Rename"
+        testID="rename-modal"
       />
 
       {/* New file modal */}
