@@ -16,6 +16,23 @@ from pydantic import BaseModel, Field
 from starlette.middleware.cors import CORSMiddleware
 
 from sandbox_run import run_isolated
+from snippet_search import (
+    build_snippet_filter,
+    ensure_snippet_indexes,
+    snippet_projection_for_mode,
+    snippet_sort_for_mode,
+)
+from usage_limits import (
+    FREE_RUN_DAILY_LIMIT,
+    PRO_RUN_DAILY_LIMIT,
+    next_utc_midnight_iso,
+    next_utc_month_iso,
+    normalize_tier,
+    run_daily_limit,
+    snippet_publish_monthly_limit,
+    utc_day,
+    utc_month,
+)
 
 
 ROOT_DIR = Path(__file__).parent
@@ -35,7 +52,6 @@ Language = Literal["javascript", "typescript", "python", "html", "css"]
 
 RUN_TIMEOUT_SEC = 10
 MAX_RUN_CODE_CHARS = 100_000
-RUN_DAILY_LIMIT = int(os.environ.get("RUN_DAILY_LIMIT", "50"))
 
 
 def now_iso() -> str:
@@ -120,35 +136,109 @@ class RunResponse(BaseModel):
 # -----------------------------
 
 
+def parse_tier(x_tier: Optional[str]) -> str:
+    return normalize_tier(x_tier)
+
+
 @api_router.get("/")
 async def root():
     return {
         "message": "Syntax Mobile IDE API",
         "ai": "client-side (Puter on web, OpenRouter BYOK on mobile)",
-        "run_daily_limit": RUN_DAILY_LIMIT,
+        "tiers": {"free": {"runs_per_day": FREE_RUN_DAILY_LIMIT}, "pro": {"runs_per_day": PRO_RUN_DAILY_LIMIT}},
     }
 
 
-def _utc_day() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+async def _run_usage_count(device_id: str) -> int:
+    doc = await db.run_usage.find_one({"device_id": device_id, "day": utc_day()})
+    return int(doc["count"]) if doc else 0
 
 
-async def check_and_increment_run_quota(device_id: str) -> None:
-    """Per-device daily cap on sandboxed /run to limit server compute costs."""
-    if not device_id or RUN_DAILY_LIMIT <= 0:
+async def _snippet_publish_count(device_id: str) -> int:
+    doc = await db.snippet_publish_usage.find_one({"device_id": device_id, "month": utc_month()})
+    return int(doc["count"]) if doc else 0
+
+
+async def check_and_increment_run_quota(device_id: str, tier: str) -> None:
+    """Per-device daily cap on sandboxed /run (tier-aware)."""
+    limit = run_daily_limit(tier)  # type: ignore[arg-type]
+    if not device_id or limit <= 0:
         return
-    day = _utc_day()
+    day = utc_day()
     doc = await db.run_usage.find_one({"device_id": device_id, "day": day})
     count = int(doc["count"]) if doc else 0
-    if count >= RUN_DAILY_LIMIT:
+    if count >= limit:
         raise HTTPException(
             status_code=429,
-            detail=f"Daily run limit reached ({RUN_DAILY_LIMIT}/day). Try again tomorrow.",
+            detail={
+                "code": "run_limit_exceeded",
+                "message": f"Daily run limit reached ({limit}/day on {tier} tier). Resets at midnight UTC.",
+                "used": count,
+                "limit": limit,
+                "tier": tier,
+                "resets_at": next_utc_midnight_iso(),
+            },
         )
     await db.run_usage.update_one(
         {"device_id": device_id, "day": day},
-        {"$inc": {"count": 1}, "$setOnInsert": {"created_at": now_iso()}},
+        {"$inc": {"count": 1}, "$setOnInsert": {"created_at": now_iso(), "tier": tier}},
         upsert=True,
+    )
+
+
+async def check_and_increment_snippet_publish(device_id: str, tier: str) -> None:
+    limit = snippet_publish_monthly_limit(tier)  # type: ignore[arg-type]
+    if not device_id or limit <= 0:
+        return
+    month = utc_month()
+    doc = await db.snippet_publish_usage.find_one({"device_id": device_id, "month": month})
+    count = int(doc["count"]) if doc else 0
+    if count >= limit:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "snippet_publish_limit_exceeded",
+                "message": f"Monthly snippet publish limit reached ({limit}/month on {tier} tier).",
+                "used": count,
+                "limit": limit,
+                "tier": tier,
+                "resets_at": next_utc_month_iso(),
+            },
+        )
+    await db.snippet_publish_usage.update_one(
+        {"device_id": device_id, "month": month},
+        {"$inc": {"count": 1}, "$setOnInsert": {"created_at": now_iso(), "tier": tier}},
+        upsert=True,
+    )
+
+
+class UsageQuota(BaseModel):
+    used: int
+    limit: int
+    resets_at: str
+
+
+class UsageResponse(BaseModel):
+    tier: str
+    runs: UsageQuota
+    snippet_publishes: UsageQuota
+
+
+@api_router.get("/usage", response_model=UsageResponse)
+async def get_usage(
+    x_device_id: Optional[str] = Header(default=None),
+    x_tier: Optional[str] = Header(default=None),
+):
+    device_id = require_device(x_device_id)
+    tier = parse_tier(x_tier)
+    run_used = await _run_usage_count(device_id)
+    run_limit = run_daily_limit(tier)  # type: ignore[arg-type]
+    pub_used = await _snippet_publish_count(device_id)
+    pub_limit = snippet_publish_monthly_limit(tier)  # type: ignore[arg-type]
+    return UsageResponse(
+        tier=tier,
+        runs=UsageQuota(used=run_used, limit=run_limit, resets_at=next_utc_midnight_iso()),
+        snippet_publishes=UsageQuota(used=pub_used, limit=pub_limit, resets_at=next_utc_month_iso()),
     )
 
 
@@ -289,8 +379,13 @@ async def delete_file(file_id: str, x_device_id: Optional[str] = Header(default=
 
 
 @api_router.post("/run", response_model=RunResponse)
-async def run_code(payload: RunRequest, x_device_id: Optional[str] = Header(default=None)):
+async def run_code(
+    payload: RunRequest,
+    x_device_id: Optional[str] = Header(default=None),
+    x_tier: Optional[str] = Header(default=None),
+):
     device_id = require_device(x_device_id)
+    tier = parse_tier(x_tier)
     lang = payload.language
     code = payload.code
     if len(code) > MAX_RUN_CODE_CHARS:
@@ -309,7 +404,7 @@ async def run_code(payload: RunRequest, x_device_id: Optional[str] = Header(defa
     if lang not in ("python", "javascript", "typescript"):
         raise HTTPException(status_code=400, detail=f"Unsupported language: {lang}")
 
-    await check_and_increment_run_quota(device_id)
+    await check_and_increment_run_quota(device_id, tier)
 
     stdout, stderr, exit_code, duration_ms = await run_isolated(
         language=lang,
@@ -365,30 +460,48 @@ def _safe_regex(q: str) -> str:
 
 
 @api_router.post("/snippets", response_model=Snippet)
-async def create_snippet(payload: SnippetCreate):
+async def create_snippet(
+    payload: SnippetCreate,
+    x_tier: Optional[str] = Header(default=None),
+):
     if not payload.title.strip() or not payload.code.strip():
         raise HTTPException(status_code=400, detail="title and code are required")
-    if not (payload.author_device or "").strip():
+    device = (payload.author_device or "").strip()
+    if not device:
         raise HTTPException(status_code=400, detail="author_device is required")
+    tier = parse_tier(x_tier)
+    await check_and_increment_snippet_publish(device, tier)
     s = Snippet(**payload.model_dump())
     await db.snippets.insert_one(s.model_dump())
     return s
 
 
 @api_router.get("/snippets", response_model=List[Snippet])
-async def list_snippets(language: Optional[Language] = None, q: Optional[str] = None, limit: int = 50):
-    filt: dict = {}
-    if language:
-        filt["language"] = language
-    if q:
-        safe = _safe_regex(q)
-        filt["$or"] = [
-            {"title": {"$regex": safe, "$options": "i"}},
-            {"description": {"$regex": safe, "$options": "i"}},
-            {"tags": {"$regex": safe, "$options": "i"}},
-        ]
-    docs = await db.snippets.find(filt, {"_id": 0}).sort("created_at", -1).to_list(min(max(limit, 1), 200))
-    return [Snippet(**d) for d in docs]
+async def list_snippets(
+    language: Optional[Language] = None,
+    q: Optional[str] = None,
+    limit: int = 50,
+    mode: str = "keyword",
+    x_tier: Optional[str] = Header(default=None),
+):
+    search_mode = "semantic" if mode == "semantic" and parse_tier(x_tier) == "pro" and q else "keyword"
+    safe = _safe_regex(q) if q else ""
+    filt = build_snippet_filter(language=language, q=q, mode=search_mode, safe_regex=safe)
+    projection = snippet_projection_for_mode(search_mode)
+    sort_spec = snippet_sort_for_mode(search_mode)
+    cap = min(max(limit, 1), 200)
+    try:
+        cursor = db.snippets.find(filt, projection).sort(sort_spec).limit(cap)
+        docs = await cursor.to_list(cap)
+    except Exception:
+        # Text index missing or $text query invalid — fall back to keyword regex.
+        if search_mode == "semantic" and q:
+            filt = build_snippet_filter(language=language, q=q, mode="keyword", safe_regex=safe)
+            docs = await db.snippets.find(filt, {"_id": 0}).sort("created_at", -1).to_list(cap)
+        else:
+            raise
+    cleaned = [{k: v for k, v in d.items() if k != "score"} for d in docs]
+    return [Snippet(**d) for d in cleaned]
 
 
 @api_router.get("/snippets/{snippet_id}", response_model=Snippet)
@@ -480,6 +593,15 @@ app.add_middleware(
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+
+@app.on_event("startup")
+async def startup_db():
+    try:
+        await ensure_snippet_indexes(db)
+        logger.info("MongoDB snippet text index ready")
+    except Exception:
+        logger.exception("snippet index setup failed (keyword search still works)")
 
 
 @app.on_event("shutdown")

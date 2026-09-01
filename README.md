@@ -38,7 +38,7 @@ pip install -r requirements.txt
 uvicorn server:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Health check: `GET http://localhost:8000/api/` → includes `run_daily_limit`.
+Health check: `GET http://localhost:8000/api/` → includes tier run limits.
 
 ### 4. Frontend
 
@@ -48,7 +48,7 @@ yarn install
 yarn start
 ```
 
-Then open in Expo Go, an emulator, or press `w` for web. The app sends `X-Device-Id` for cloud sync and run rate limits.
+Then open in Expo Go, an emulator, or press `w` for web. The app sends `X-Device-Id` and `X-Tier` for cloud sync and usage limits.
 
 ### 5. Enable AI
 
@@ -56,6 +56,20 @@ Then open in Expo Go, an emulator, or press `w` for web. The app sends `X-Device
 |----------|--------|
 | **Web** | Open the AI screen and send a message — sign in to Puter when prompted. Usage is billed to the user's Puter account. |
 | **iOS / Android** | Tap the gear icon on the AI screen → paste an [OpenRouter](https://openrouter.ai/keys) API key. The key stays on the device and is sent only to OpenRouter. |
+
+### 6. Free vs Pro (dev scaffold)
+
+Open the file drawer → **Plan & usage** to see quotas and toggle Free/Pro until billing is wired.
+
+| Feature | Free | Pro |
+|---------|------|-----|
+| Code runs / day (server) | 10 | 50 |
+| AI messages / month (device) | 25 | 500 |
+| Snippet publishes / month | 3 | 100 |
+| Cloud sync | — | ✓ |
+| Semantic snippet search | — | ✓ |
+
+See `docs/LAPTOP_CHECKLIST.md` for EAS build steps on your laptop.
 
 ## Architecture
 
@@ -65,9 +79,9 @@ Then open in Expo Go, an emulator, or press `w` for web. The app sends `X-Device
 | API | FastAPI + Motor (MongoDB) — projects, files, snippets, sandboxed `/run` |
 | AI (web) | [Puter.js](https://docs.puter.com/) — user-pays, no server key |
 | AI (mobile) | OpenRouter BYOK from device keychain |
-| Runner | Isolated temp dir + resource limits; Docker `--network=none` when available; `RUN_DAILY_LIMIT` per device |
+| Runner | Isolated temp dir + resource limits; Docker `--network=none` when available; per-tier daily run limits |
 
-Chat history is stored **locally** (AsyncStorage). Cloud sync remains device-scoped via `X-Device-Id`.
+Chat history is stored **locally** (AsyncStorage). Cloud sync (Pro) uses device-scoped `X-Device-Id` + `X-Tier`.
 
 ## Known production gaps
 

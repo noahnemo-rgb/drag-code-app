@@ -6,6 +6,7 @@ import { useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -21,6 +22,8 @@ import { AiSettingsModal } from "@/src/components/AiSettingsModal";
 import { getAiProviderInfo, streamAiChat } from "@/src/lib/ai-chat";
 import { appendChatTurn, clearChatHistory, loadChatHistory } from "@/src/lib/chat-storage";
 import { loadEditorContext, type EditorContext } from "@/src/lib/editor-context";
+import { getTier } from "@/src/lib/tier-store";
+import { canSendAiMessage, incrementAiMessageCount } from "@/src/lib/usage-tiers";
 import { highlightLine } from "@/src/lib/highlight";
 import type { Language } from "@/src/lib/api";
 import { COLORS, FONT, RADIUS, SPACING, TEXT } from "@/src/theme";
@@ -81,6 +84,15 @@ export default function AiScreen() {
   const sendPrompt = async (sid: string, text: string) => {
     const t = text.trim();
     if (!t || !sid) return;
+    const tier = await getTier();
+    const aiQuota = await canSendAiMessage(tier);
+    if (!aiQuota.ok) {
+      Alert.alert(
+        "AI message limit reached",
+        `You've used ${aiQuota.used}/${aiQuota.limit} AI messages this month on the ${tier} plan. Open Plan & usage in the file drawer to see limits or try Pro (dev toggle).`,
+      );
+      return;
+    }
     if (!providerReady && Platform.OS !== "web") {
       setShowSettings(true);
       return;
@@ -110,6 +122,7 @@ export default function AiScreen() {
       });
       setMessages((m) => m.map((msg) => (msg.id === aiMsg.id ? { ...msg, pending: false } : msg)));
       await appendChatTurn(sid, t, assistantText);
+      await incrementAiMessageCount();
       await refreshProvider();
     } catch (e: unknown) {
       setMessages((m) =>

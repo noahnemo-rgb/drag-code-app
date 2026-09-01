@@ -1,3 +1,5 @@
+import { ApiError, parseApiErrorText } from "./api-errors";
+import { getTier, type Tier } from "./tier-store";
 import { getDeviceId } from "./device-id";
 
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL ?? "";
@@ -30,11 +32,24 @@ export interface RunResult {
   duration_ms: number;
 }
 
+export interface UsageQuota {
+  used: number;
+  limit: number;
+  resets_at: string;
+}
+
+export interface UsageSnapshot {
+  tier: Tier;
+  runs: UsageQuota;
+  snippet_publishes: UsageQuota;
+}
+
 async function authHeaders(extra?: HeadersInit): Promise<Record<string, string>> {
-  const deviceId = await getDeviceId();
+  const [deviceId, tier] = await Promise.all([getDeviceId(), getTier()]);
   return {
     "Content-Type": "application/json",
     "X-Device-Id": deviceId,
+    "X-Tier": tier,
     ...(extra as Record<string, string> | undefined),
   };
 }
@@ -45,7 +60,11 @@ async function j<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers,
   });
-  if (!res.ok) throw new Error(`API ${path} ${res.status}: ${await res.text()}`);
+  if (!res.ok) {
+    const text = await res.text();
+    const body = parseApiErrorText(text);
+    throw new ApiError(res.status, path, body, `API ${path} ${res.status}: ${text}`);
+  }
   return (await res.json()) as T;
 }
 
@@ -67,10 +86,13 @@ export const api = {
   runCode: (language: Language, code: string) =>
     j<RunResult>("/run", { method: "POST", body: JSON.stringify({ language, code }) }),
 
-  listSnippets: (params: { language?: Language; q?: string } = {}) => {
+  getUsage: () => j<UsageSnapshot>("/usage"),
+
+  listSnippets: (params: { language?: Language; q?: string; mode?: "keyword" | "semantic" } = {}) => {
     const qs = new URLSearchParams();
     if (params.language) qs.set("language", params.language);
     if (params.q) qs.set("q", params.q);
+    if (params.mode === "semantic") qs.set("mode", "semantic");
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
     return j<Snippet[]>(`/snippets${suffix}`);
   },

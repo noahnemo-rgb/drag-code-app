@@ -1,6 +1,8 @@
 import { Feather } from "@expo/vector-icons";
+import { useState } from "react";
 import { Animated, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import type { FileItem, Project } from "@/src/lib/api";
+import { UsageSheet } from "@/src/components/UsageSheet";
 import { useEpisodeMode } from "@/src/lib/episode-store";
 import type { SyncMode } from "@/src/lib/storage";
 import { COLORS, FONT, RADIUS, SPACING, TEXT } from "@/src/theme";
@@ -51,6 +53,7 @@ export function FileDrawer({
   onBluetooth: () => void;
 }) {
   const { enabled: episodeEnabled, toggle: toggleEpisode } = useEpisodeMode();
+  const [showUsage, setShowUsage] = useState(false);
 
   return (
     <>
@@ -193,6 +196,15 @@ export function FileDrawer({
             />
           </View>
 
+          <Pressable onPress={() => setShowUsage(true)} style={styles.usageBtn} testID="open-usage-btn">
+            <Feather name="bar-chart-2" size={16} color={COLORS.brand} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.footerLabel}>Plan & usage</Text>
+              <Text style={styles.footerSub}>Free / Pro limits and quotas</Text>
+            </View>
+            <Feather name="chevron-right" size={14} color={COLORS.onSurfaceSecondary} />
+          </Pressable>
+
           <View style={styles.footerRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.footerLabel}>Sync</Text>
@@ -208,6 +220,7 @@ export function FileDrawer({
           </View>
         </View>
       </Animated.View>
+      <UsageSheet visible={showUsage} onClose={() => setShowUsage(false)} />
     </>
   );
 }
@@ -333,5 +346,16 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     alignItems: "center",
     justifyContent: "center",
+  },
+  usageBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SPACING.sm,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.sm,
+    borderRadius: RADIUS.md,
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
 });
