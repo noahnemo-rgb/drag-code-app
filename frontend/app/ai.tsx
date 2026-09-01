@@ -3,9 +3,10 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -17,8 +18,12 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { api, streamChat } from "@/src/lib/api";
+import { AiSettingsModal } from "@/src/components/AiSettingsModal";
+import { getAiProviderInfo, streamAiChat } from "@/src/lib/ai-chat";
+import { appendChatTurn, clearChatHistory, loadChatHistory } from "@/src/lib/chat-storage";
 import { loadEditorContext, type EditorContext } from "@/src/lib/editor-context";
+import { getTier } from "@/src/lib/tier-store";
+import { canSendAiMessage, incrementAiMessageCount } from "@/src/lib/usage-tiers";
 import { highlightLine } from "@/src/lib/highlight";
 import type { Language } from "@/src/lib/api";
 import { COLORS, FONT, RADIUS, SPACING, TEXT } from "@/src/theme";
@@ -39,7 +44,16 @@ export default function AiScreen() {
   const [input, setInput] = useState<string>("");
   const [sending, setSending] = useState<boolean>(false);
   const [editorCtx, setEditorCtx] = useState<EditorContext | undefined>(undefined);
+  const [providerLabel, setProviderLabel] = useState<string>("");
+  const [providerReady, setProviderReady] = useState<boolean>(false);
+  const [showSettings, setShowSettings] = useState<boolean>(false);
   const listRef = useRef<FlatList<Msg>>(null);
+
+  const refreshProvider = useCallback(async () => {
+    const info = await getAiProviderInfo();
+    setProviderLabel(info.label);
+    setProviderReady(info.configured);
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -50,31 +64,39 @@ export default function AiScreen() {
       }
       setSessionId(sid);
       setEditorCtx(await loadEditorContext());
-      try {
-        const history = await api.getChatHistory(sid);
-        setMessages(
-          history.map((h) => ({
-            id: h.id,
-            role: h.role === "assistant" ? "assistant" : "user",
-            content: h.content,
-          })),
-        );
-      } catch {
-        // no history yet, ignore
-      }
-      // Pick up an "Explain with AI" prompt from the editor and auto-send it.
+      await refreshProvider();
+      const history = await loadChatHistory(sid);
+      setMessages(
+        history.map((h) => ({
+          id: h.id,
+          role: h.role,
+          content: h.content,
+        })),
+      );
       const pending = await AsyncStorage.getItem("syntax.pending_prompt");
       if (pending) {
         await AsyncStorage.removeItem("syntax.pending_prompt");
-        // Fire-and-forget; state is bound to sid via closure.
         void sendPrompt(sid, pending);
       }
     })();
-  }, []);
+  }, [refreshProvider]);
 
   const sendPrompt = async (sid: string, text: string) => {
     const t = text.trim();
     if (!t || !sid) return;
+    const tier = await getTier();
+    const aiQuota = await canSendAiMessage(tier);
+    if (!aiQuota.ok) {
+      Alert.alert(
+        "AI message limit reached",
+        `You've used ${aiQuota.used}/${aiQuota.limit} AI messages this month on the ${tier} plan. Open Plan & usage in the file drawer to see limits or try Pro (dev toggle).`,
+      );
+      return;
+    }
+    if (!providerReady && Platform.OS !== "web") {
+      setShowSettings(true);
+      return;
+    }
     const userMsg: Msg = { id: `u-${Date.now()}`, role: "user", content: t };
     const aiMsg: Msg = { id: `a-${Date.now()}`, role: "assistant", content: "", pending: true };
     setMessages((m) => [...m, userMsg, aiMsg]);
@@ -82,25 +104,30 @@ export default function AiScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 30);
     try {
-      // Refresh context at send-time so the latest buffer is attached.
       const ctx = (await loadEditorContext()) ?? editorCtx;
       if (ctx) setEditorCtx(ctx);
-      await streamChat(
-        sid,
-        t,
-        ctx ? { code: ctx.code, language: ctx.language } : undefined,
-        (chunk) => {
+      const history = messages
+        .filter((m) => !m.pending && m.content.trim())
+        .map((m) => ({ role: m.role, content: m.content }));
+      const assistantText = await streamAiChat({
+        message: t,
+        history,
+        context: ctx ? { code: ctx.code, language: ctx.language } : undefined,
+        onChunk: (chunk) => {
           setMessages((m) =>
             m.map((msg) => (msg.id === aiMsg.id ? { ...msg, content: msg.content + chunk } : msg)),
           );
           listRef.current?.scrollToEnd({ animated: false });
         },
-      );
+      });
       setMessages((m) => m.map((msg) => (msg.id === aiMsg.id ? { ...msg, pending: false } : msg)));
+      await appendChatTurn(sid, t, assistantText);
+      await incrementAiMessageCount();
+      await refreshProvider();
     } catch (e: unknown) {
       setMessages((m) =>
         m.map((msg) =>
-          msg.id === aiMsg.id ? { ...msg, content: `[Error contacting OpenRouter: ${String(e)}]`, pending: false } : msg,
+          msg.id === aiMsg.id ? { ...msg, content: `[Error: ${String(e)}]`, pending: false } : msg,
         ),
       );
     } finally {
@@ -118,7 +145,7 @@ export default function AiScreen() {
 
   const clear = async () => {
     if (!sessionId) return;
-    await api.clearChatHistory(sessionId);
+    await clearChatHistory(sessionId);
     setMessages([]);
   };
 
@@ -135,13 +162,18 @@ export default function AiScreen() {
   };
 
   const applyFixToEditor = async (text: string) => {
-    // Replaces the ENTIRE editor content with the AI's fixed code — the
-    // one-tap "Apply Fix" novice flow triggered from the Why? debugging path.
     await AsyncStorage.setItem("syntax.pending_replace", text);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     if (router.canGoBack()) router.back();
     else router.replace("/");
   };
+
+  const providerHint =
+    Platform.OS === "web"
+      ? "Powered by Puter — sign in when prompted; usage is on your Puter account."
+      : providerReady
+        ? providerLabel
+        : "Add your OpenRouter key in settings to enable AI.";
 
   return (
     <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
@@ -151,13 +183,18 @@ export default function AiScreen() {
         </Pressable>
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>AI Assistant</Text>
-          <Text style={styles.subtitle}>OpenRouter</Text>
+          <Text style={styles.subtitle} numberOfLines={1}>
+            {providerLabel || (Platform.OS === "web" ? "Puter" : "OpenRouter BYOK")}
+          </Text>
           {editorCtx ? (
             <Text style={styles.contextHint} numberOfLines={1} testID="ai-context-hint">
               Using {editorCtx.name || "current file"} ({editorCtx.language})
             </Text>
           ) : null}
         </View>
+        <Pressable onPress={() => setShowSettings(true)} style={styles.iconBtn} testID="ai-settings-btn" hitSlop={8}>
+          <Feather name="settings" size={18} color={COLORS.onSurfaceSecondary} />
+        </Pressable>
         <Pressable onPress={clear} style={styles.iconBtn} testID="clear-chat-btn" hitSlop={8}>
           <Feather name="trash-2" size={18} color={COLORS.onSurfaceSecondary} />
         </Pressable>
@@ -173,9 +210,12 @@ export default function AiScreen() {
               <Feather name="cpu" size={28} color={COLORS.brand} />
             </View>
             <Text style={styles.emptyTitle}>How can I help with your code today?</Text>
-            <Text style={styles.emptySub}>
-              Ask about syntax, request code, or explain what a snippet does.
-            </Text>
+            <Text style={styles.emptySub}>{providerHint}</Text>
+            {!providerReady && Platform.OS !== "web" ? (
+              <Pressable style={styles.setupBtn} onPress={() => setShowSettings(true)} testID="ai-open-settings-cta">
+                <Text style={styles.setupBtnText}>Open AI settings</Text>
+              </Pressable>
+            ) : null}
           </View>
         ) : (
           <FlatList
@@ -183,7 +223,9 @@ export default function AiScreen() {
             data={messages}
             keyExtractor={(m) => m.id}
             contentContainerStyle={styles.list}
-            renderItem={({ item }) => <MessageBubble msg={item} onCopy={copy} onInsert={insertIntoEditor} onApplyFix={applyFixToEditor} />}
+            renderItem={({ item }) => (
+              <MessageBubble msg={item} onCopy={copy} onInsert={insertIntoEditor} onApplyFix={applyFixToEditor} />
+            )}
             onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
             testID="chat-list"
           />
@@ -214,6 +256,12 @@ export default function AiScreen() {
           </Pressable>
         </View>
       </KeyboardAvoidingView>
+
+      <AiSettingsModal
+        visible={showSettings}
+        onClose={() => setShowSettings(false)}
+        onSaved={() => void refreshProvider()}
+      />
     </SafeAreaView>
   );
 }
@@ -231,8 +279,6 @@ function MessageBubble({
 }) {
   const isUser = msg.role === "user";
   const parts = parseContent(msg.content);
-  // The first code block in an assistant reply is treated as the "canonical fix"
-  // for the one-tap Apply Fix flow.
   const firstCodeIdx = !isUser ? parts.findIndex((p) => p.kind === "code") : -1;
   return (
     <View style={[styles.bubbleRow, isUser ? styles.bubbleRowRight : styles.bubbleRowLeft]}>
@@ -367,11 +413,25 @@ const styles = StyleSheet.create({
 
   empty: { flex: 1, alignItems: "center", justifyContent: "center", padding: SPACING.xl, gap: SPACING.md },
   emptyIcon: {
-    width: 72, height: 72, borderRadius: 36, alignItems: "center", justifyContent: "center",
-    backgroundColor: COLORS.brandTertiary, borderWidth: 1, borderColor: COLORS.brand,
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.brandTertiary,
+    borderWidth: 1,
+    borderColor: COLORS.brand,
   },
   emptyTitle: { color: COLORS.onSurface, fontSize: TEXT.lg, fontWeight: "600", textAlign: "center" },
   emptySub: { color: COLORS.onSurfaceSecondary, fontSize: TEXT.base, textAlign: "center" },
+  setupBtn: {
+    marginTop: SPACING.sm,
+    backgroundColor: COLORS.brand,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.sm,
+    borderRadius: RADIUS.md,
+  },
+  setupBtnText: { color: COLORS.onBrand, fontWeight: "700" },
 
   list: { padding: SPACING.md, gap: SPACING.md, paddingBottom: SPACING.xl },
   bubbleRow: { flexDirection: "row", marginBottom: SPACING.md },

@@ -25,6 +25,23 @@ from auth_utils import (
 )
 from openrouter_chat import build_messages, stream_openrouter
 from sandbox_run import run_isolated
+from snippet_search import (
+    build_snippet_filter,
+    ensure_snippet_indexes,
+    snippet_projection_for_mode,
+    snippet_sort_for_mode,
+)
+from usage_limits import (
+    FREE_RUN_DAILY_LIMIT,
+    PRO_RUN_DAILY_LIMIT,
+    next_utc_midnight_iso,
+    next_utc_month_iso,
+    normalize_tier,
+    run_daily_limit,
+    snippet_publish_monthly_limit,
+    utc_day,
+    utc_month,
+)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -244,6 +261,10 @@ def _safe_regex(q: str) -> str:
 # -----------------------------
 
 
+def parse_tier(x_tier: Optional[str]) -> str:
+    return normalize_tier(x_tier)
+
+
 @api_router.get("/")
 async def root():
     return {
@@ -251,9 +272,106 @@ async def root():
         "chat_provider": "openrouter",
         "chat_model": OPENROUTER_MODEL,
         "chat_configured": bool(OPENROUTER_API_KEY),
+        "ai": "client-side (Puter on web, OpenRouter BYOK on mobile) + optional server OpenRouter",
         "auth_required": REQUIRE_AUTH,
         "runner_url": RUNNER_URL or None,
+        "tiers": {
+            "free": {"runs_per_day": FREE_RUN_DAILY_LIMIT},
+            "pro": {"runs_per_day": PRO_RUN_DAILY_LIMIT},
+        },
     }
+
+
+async def _run_usage_count(user_id: str) -> int:
+    doc = await db.run_usage.find_one({"user_id": user_id, "day": utc_day()})
+    return int(doc["count"]) if doc else 0
+
+
+async def _snippet_publish_count(user_id: str) -> int:
+    doc = await db.snippet_publish_usage.find_one({"user_id": user_id, "month": utc_month()})
+    return int(doc["count"]) if doc else 0
+
+
+async def check_and_increment_run_quota(user_id: str, tier: str) -> None:
+    """Per-user daily cap on sandboxed /run (tier-aware)."""
+    limit = run_daily_limit(tier)  # type: ignore[arg-type]
+    if not user_id or limit <= 0:
+        return
+    day = utc_day()
+    doc = await db.run_usage.find_one({"user_id": user_id, "day": day})
+    count = int(doc["count"]) if doc else 0
+    if count >= limit:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "run_limit_exceeded",
+                "message": f"Daily run limit reached ({limit}/day on {tier} tier). Resets at midnight UTC.",
+                "used": count,
+                "limit": limit,
+                "tier": tier,
+                "resets_at": next_utc_midnight_iso(),
+            },
+        )
+    await db.run_usage.update_one(
+        {"user_id": user_id, "day": day},
+        {"$inc": {"count": 1}, "$setOnInsert": {"created_at": now_iso(), "tier": tier}},
+        upsert=True,
+    )
+
+
+async def check_and_increment_snippet_publish(user_id: str, tier: str) -> None:
+    limit = snippet_publish_monthly_limit(tier)  # type: ignore[arg-type]
+    if not user_id or limit <= 0:
+        return
+    month = utc_month()
+    doc = await db.snippet_publish_usage.find_one({"user_id": user_id, "month": month})
+    count = int(doc["count"]) if doc else 0
+    if count >= limit:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "snippet_publish_limit_exceeded",
+                "message": f"Monthly snippet publish limit reached ({limit}/month on {tier} tier).",
+                "used": count,
+                "limit": limit,
+                "tier": tier,
+                "resets_at": next_utc_month_iso(),
+            },
+        )
+    await db.snippet_publish_usage.update_one(
+        {"user_id": user_id, "month": month},
+        {"$inc": {"count": 1}, "$setOnInsert": {"created_at": now_iso(), "tier": tier}},
+        upsert=True,
+    )
+
+
+class UsageQuota(BaseModel):
+    used: int
+    limit: int
+    resets_at: str
+
+
+class UsageResponse(BaseModel):
+    tier: str
+    runs: UsageQuota
+    snippet_publishes: UsageQuota
+
+
+@api_router.get("/usage", response_model=UsageResponse)
+async def get_usage(
+    user: AuthUser = Depends(require_user),
+    x_tier: Optional[str] = Header(default=None),
+):
+    tier = parse_tier(x_tier)
+    run_used = await _run_usage_count(user.id)
+    run_limit = run_daily_limit(tier)  # type: ignore[arg-type]
+    pub_used = await _snippet_publish_count(user.id)
+    pub_limit = snippet_publish_monthly_limit(tier)  # type: ignore[arg-type]
+    return UsageResponse(
+        tier=tier,
+        runs=UsageQuota(used=run_used, limit=run_limit, resets_at=next_utc_midnight_iso()),
+        snippet_publishes=UsageQuota(used=pub_used, limit=pub_limit, resets_at=next_utc_month_iso()),
+    )
 
 
 # -----------------------------
@@ -454,7 +572,11 @@ async def _run_via_runner(language: str, code: str) -> RunResponse:
 
 
 @api_router.post("/run", response_model=RunResponse)
-async def run_code(payload: RunRequest, user: AuthUser = Depends(require_user)):
+async def run_code(
+    payload: RunRequest,
+    user: AuthUser = Depends(require_user),
+    x_tier: Optional[str] = Header(default=None),
+):
     lang = payload.language
     code = payload.code
     if len(code) > MAX_RUN_CODE_CHARS:
@@ -468,6 +590,9 @@ async def run_code(payload: RunRequest, user: AuthUser = Depends(require_user)):
         return RunResponse(stdout=msg, stderr="", exit_code=0, duration_ms=0, sandbox="noop")
     if lang not in ("python", "javascript", "typescript"):
         raise HTTPException(status_code=400, detail=f"Unsupported language: {lang}")
+
+    tier = parse_tier(x_tier)
+    await check_and_increment_run_quota(user.id, tier)
 
     if RUNNER_URL:
         return await _run_via_runner(lang, code)
@@ -576,9 +701,15 @@ async def clear_chat_history(session_id: str, user: AuthUser = Depends(require_u
 
 
 @api_router.post("/snippets", response_model=Snippet)
-async def create_snippet(payload: SnippetCreate, user: AuthUser = Depends(require_user)):
+async def create_snippet(
+    payload: SnippetCreate,
+    user: AuthUser = Depends(require_user),
+    x_tier: Optional[str] = Header(default=None),
+):
     if not payload.title.strip() or not payload.code.strip():
         raise HTTPException(status_code=400, detail="title and code are required")
+    tier = parse_tier(x_tier)
+    await check_and_increment_snippet_publish(user.id, tier)
     s = Snippet(
         author=(payload.author or user.display_name).strip() or user.email,
         author_id=user.id,
@@ -594,19 +725,30 @@ async def create_snippet(payload: SnippetCreate, user: AuthUser = Depends(requir
 
 
 @api_router.get("/snippets", response_model=List[Snippet])
-async def list_snippets(language: Optional[Language] = None, q: Optional[str] = None, limit: int = 50):
-    filt: dict = {}
-    if language:
-        filt["language"] = language
-    if q:
-        safe = _safe_regex(q)
-        filt["$or"] = [
-            {"title": {"$regex": safe, "$options": "i"}},
-            {"description": {"$regex": safe, "$options": "i"}},
-            {"tags": {"$regex": safe, "$options": "i"}},
-        ]
-    docs = await db.snippets.find(filt, {"_id": 0}).sort("created_at", -1).to_list(min(max(limit, 1), 200))
-    return [Snippet(**d) for d in docs]
+async def list_snippets(
+    language: Optional[Language] = None,
+    q: Optional[str] = None,
+    limit: int = 50,
+    mode: str = "keyword",
+    x_tier: Optional[str] = Header(default=None),
+):
+    search_mode = "semantic" if mode == "semantic" and parse_tier(x_tier) == "pro" and q else "keyword"
+    safe = _safe_regex(q) if q else ""
+    filt = build_snippet_filter(language=language, q=q, mode=search_mode, safe_regex=safe)
+    projection = snippet_projection_for_mode(search_mode)
+    sort_spec = snippet_sort_for_mode(search_mode)
+    cap = min(max(limit, 1), 200)
+    try:
+        cursor = db.snippets.find(filt, projection).sort(sort_spec).limit(cap)
+        docs = await cursor.to_list(cap)
+    except Exception:
+        if search_mode == "semantic" and q:
+            filt = build_snippet_filter(language=language, q=q, mode="keyword", safe_regex=safe)
+            docs = await db.snippets.find(filt, {"_id": 0}).sort("created_at", -1).to_list(cap)
+        else:
+            raise
+    cleaned = [{k: v for k, v in d.items() if k != "score"} for d in docs]
+    return [Snippet(**d) for d in cleaned]
 
 
 @api_router.get("/snippets/{snippet_id}", response_model=Snippet)
@@ -723,6 +865,9 @@ async def startup_indexes():
     await db.chat_messages.create_index([("owner_id", 1), ("session_id", 1), ("created_at", 1)])
     await db.snippets.create_index([("created_at", -1)])
     await db.snippet_stars.create_index([("snippet_id", 1), ("device_id", 1)], unique=True)
+    await db.run_usage.create_index([("user_id", 1), ("day", 1)], unique=True)
+    await db.snippet_publish_usage.create_index([("user_id", 1), ("month", 1)], unique=True)
+    await ensure_snippet_indexes(db)
 
 
 @app.on_event("shutdown")

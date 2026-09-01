@@ -1,3 +1,5 @@
+import { ApiError, parseApiErrorText } from "./api-errors";
+import { getTier, type Tier } from "./tier-store";
 import { getDeviceId } from "./device-id";
 import {
   AuthResponse,
@@ -39,12 +41,24 @@ export interface RunResult {
   sandbox?: string;
 }
 
+export interface UsageQuota {
+  used: number;
+  limit: number;
+  resets_at: string;
+}
+
+export interface UsageSnapshot {
+  tier: Tier;
+  runs: UsageQuota;
+  snippet_publishes: UsageQuota;
+}
+
 async function authHeaders(extra?: HeadersInit): Promise<Record<string, string>> {
-  const deviceId = await getDeviceId();
-  const token = await getAccessToken();
+  const [deviceId, tier, token] = await Promise.all([getDeviceId(), getTier(), getAccessToken()]);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "X-Device-Id": deviceId,
+    "X-Tier": tier,
     ...(extra as Record<string, string> | undefined),
   };
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -58,10 +72,13 @@ async function j<T>(path: string, init?: RequestInit): Promise<T> {
     headers,
   });
   if (res.status === 401) {
-    // Stale token — clear so UI can prompt login.
     await clearSession();
   }
-  if (!res.ok) throw new Error(`API ${path} ${res.status}: ${await res.text()}`);
+  if (!res.ok) {
+    const text = await res.text();
+    const body = parseApiErrorText(text);
+    throw new ApiError(res.status, path, body, `API ${path} ${res.status}: ${text}`);
+  }
   return (await res.json()) as T;
 }
 
@@ -103,6 +120,8 @@ export const api = {
   runCode: (language: Language, code: string) =>
     j<RunResult>("/run", { method: "POST", body: JSON.stringify({ language, code }) }),
 
+  getUsage: () => j<UsageSnapshot>("/usage"),
+
   chatStreamUrl: () => `${BASE}/api/chat/stream`,
   getChatHistory: (sessionId: string) =>
     j<{ id: string; session_id: string; role: string; content: string; created_at: string }[]>(
@@ -111,10 +130,11 @@ export const api = {
   clearChatHistory: (sessionId: string) =>
     j<{ ok: boolean }>(`/chat/history/${sessionId}`, { method: "DELETE" }),
 
-  listSnippets: (params: { language?: Language; q?: string } = {}) => {
+  listSnippets: (params: { language?: Language; q?: string; mode?: "keyword" | "semantic" } = {}) => {
     const qs = new URLSearchParams();
     if (params.language) qs.set("language", params.language);
     if (params.q) qs.set("q", params.q);
+    if (params.mode === "semantic") qs.set("mode", "semantic");
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
     return j<Snippet[]>(`/snippets${suffix}`);
   },
@@ -237,7 +257,6 @@ async function streamChatFetch(
     }
     return full;
   }
-  // Fetch succeeded but streaming body is unavailable — deliver all at once.
   const text = await res.text();
   if (text) onChunk(text);
   return text;
@@ -258,8 +277,6 @@ export const streamChat = async (
     context_language: context?.language,
   };
 
-  // Prefer XHR on native (reliable progressive chunks). On web, try fetch streams
-  // first and fall back to XHR if the body reader is missing or throws.
   const isNative = typeof navigator !== "undefined" && (navigator as { product?: string }).product === "ReactNative";
   if (isNative || typeof XMLHttpRequest !== "undefined") {
     if (isNative) return streamChatXhr(url, body, headers, onChunk);

@@ -21,8 +21,11 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { api, FileItem, Language, Snippet, SnippetUpdate } from "@/src/lib/api";
+import { friendlyApiMessage } from "@/src/lib/api-errors";
 import { AuthUser, getAuthUser, isLoggedIn } from "@/src/lib/auth";
 import { getDeviceId } from "@/src/lib/device-id";
+import { getTier, type Tier } from "@/src/lib/tier-store";
+import { canUseSemanticSearch } from "@/src/lib/usage-tiers";
 import { highlightLine } from "@/src/lib/highlight";
 import { local, settings } from "@/src/lib/storage";
 import { store } from "@/src/lib/store";
@@ -46,6 +49,8 @@ export default function SnippetsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [langFilter, setLangFilter] = useState<Language | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchMode, setSearchMode] = useState<"keyword" | "semantic">("keyword");
+  const [tier, setTier] = useState<Tier>("free");
   const [scope, setScope] = useState<"all" | "mine">("all");
   const [deviceId, setDeviceId] = useState<string>("");
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -61,7 +66,8 @@ export default function SnippetsScreen() {
       const d = await getDeviceId();
       setDeviceId(d);
       setUser(await getAuthUser());
-      await refresh(langFilter, searchQuery, d);
+      setTier(await getTier());
+      await refresh(langFilter, searchQuery, d, searchMode);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -86,12 +92,13 @@ export default function SnippetsScreen() {
   }, []);
 
   const refresh = useCallback(
-    async (lang: Language | null, q: string, did: string) => {
+    async (lang: Language | null, q: string, did: string, mode: "keyword" | "semantic") => {
       setLoading(true);
       try {
         const list = await api.listSnippets({
           language: lang ?? undefined,
           q: q.trim() || undefined,
+          mode: mode === "semantic" ? "semantic" : undefined,
         });
         setSnippets(list);
         await hydrateStars(list, did);
@@ -105,16 +112,16 @@ export default function SnippetsScreen() {
   useEffect(() => {
     const t = setTimeout(() => {
       if (!deviceId) return;
-      void refresh(langFilter, searchQuery, deviceId);
+      void refresh(langFilter, searchQuery, deviceId, searchMode);
     }, 300);
     return () => clearTimeout(t);
-  }, [langFilter, searchQuery, refresh, deviceId]);
+  }, [langFilter, searchQuery, searchMode, refresh, deviceId]);
 
   const onRefresh = async () => {
     setRefreshing(true);
     try {
       setUser(await getAuthUser());
-      await refresh(langFilter, searchQuery, deviceId);
+      await refresh(langFilter, searchQuery, deviceId, searchMode);
     } finally {
       setRefreshing(false);
     }
@@ -217,6 +224,30 @@ export default function SnippetsScreen() {
             <Feather name="x" size={14} color={COLORS.onSurfaceSecondary} />
           </Pressable>
         ) : null}
+      </View>
+
+      <View style={styles.searchModeRow}>
+        <Pressable
+          onPress={() => setSearchMode("keyword")}
+          style={[styles.searchModeChip, searchMode === "keyword" && styles.searchModeChipActive]}
+          testID="search-mode-keyword"
+        >
+          <Text style={[styles.searchModeLabel, searchMode === "keyword" && { color: COLORS.brand }]}>Keyword</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => {
+            if (canUseSemanticSearch(tier)) setSearchMode("semantic");
+          }}
+          style={[
+            styles.searchModeChip,
+            searchMode === "semantic" && styles.searchModeChipActive,
+            !canUseSemanticSearch(tier) && { opacity: 0.45 },
+          ]}
+          testID="search-mode-semantic"
+        >
+          <Feather name={canUseSemanticSearch(tier) ? "zap" : "lock"} size={12} color={searchMode === "semantic" ? COLORS.brand : COLORS.onSurfaceSecondary} />
+          <Text style={[styles.searchModeLabel, searchMode === "semantic" && { color: COLORS.brand }]}>Semantic (Pro)</Text>
+        </Pressable>
       </View>
 
       {/* All / Mine segmented control */}
@@ -586,7 +617,7 @@ function PublishModal({
       setCode("");
       setPrefilled(false);
     } catch (e: unknown) {
-      setError(String(e));
+      setError(friendlyApiMessage(e));
     } finally {
       setSubmitting(false);
     }
@@ -749,7 +780,7 @@ function EditSnippetModal({
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       onSaved(updated);
     } catch (e: unknown) {
-      setError(String(e));
+      setError(friendlyApiMessage(e));
     } finally {
       setSubmitting(false);
     }
@@ -904,6 +935,25 @@ const styles = StyleSheet.create({
     fontSize: TEXT.sm,
     padding: 0,
   },
+  searchModeRow: {
+    flexDirection: "row",
+    gap: SPACING.sm,
+    marginHorizontal: SPACING.md,
+    marginTop: SPACING.sm,
+  },
+  searchModeChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.xs,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.surfaceSecondary,
+  },
+  searchModeChipActive: { borderColor: COLORS.brand, backgroundColor: COLORS.brandTertiary },
+  searchModeLabel: { color: COLORS.onSurfaceSecondary, fontSize: TEXT.sm - 1, fontWeight: "600" },
 
   segmentWrap: {
     flexDirection: "row",

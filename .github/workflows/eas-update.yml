@@ -1,0 +1,50 @@
+name: EAS Update
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/eas-update.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: eas-update-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  update:
+    name: Publish production OTA
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: yarn
+          cache-dependency-path: frontend/yarn.lock
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Setup Expo
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Publish EAS Update (production channel)
+        run: |
+          if grep -q 'REPLACE_WITH_EAS_PROJECT_ID' app.json; then
+            echo "::error::app.json still has REPLACE_WITH_EAS_PROJECT_ID. Run 'npx eas-cli init' and 'npx eas-cli update:configure' locally, then commit."
+            exit 1
+          fi
+          eas update --channel production --message "main@${GITHUB_SHA::7}" --non-interactive
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
