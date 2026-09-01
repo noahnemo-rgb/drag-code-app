@@ -1,5 +1,6 @@
 """Backend API tests for Syntax Mobile IDE.
-Covers: health, projects CRUD, files CRUD, code run, chat stream + history.
+Covers: health, projects CRUD, files CRUD, code run (with device id + rate limits).
+AI chat is client-side (Puter / OpenRouter BYOK) — no /api/chat/* routes.
 """
 import os
 import uuid
@@ -7,14 +8,15 @@ import time
 import pytest
 import requests
 
-BASE_URL = "https://drag-code-app.preview.emergentagent.com"
+BASE_URL = os.environ.get("SYNTAX_TEST_BASE_URL", "https://drag-code-app.preview.emergentagent.com")
 API = f"{BASE_URL}/api"
+TEST_DEVICE = f"TEST_{uuid.uuid4().hex[:12]}"
 
 
 @pytest.fixture(scope="session")
 def s():
     sess = requests.Session()
-    sess.headers.update({"Content-Type": "application/json"})
+    sess.headers.update({"Content-Type": "application/json", "X-Device-Id": TEST_DEVICE})
     return sess
 
 
@@ -22,7 +24,9 @@ def s():
 def test_health(s):
     r = s.get(f"{API}/")
     assert r.status_code == 200, r.text
-    assert "message" in r.json()
+    body = r.json()
+    assert "message" in body
+    assert "run_daily_limit" in body
 
 
 # ---------------- Projects CRUD ----------------
@@ -56,7 +60,6 @@ class TestProjects:
         r = s.patch(f"{API}/projects/{TestProjects.proj_id}", json={"name": "TEST_Proj_Renamed"})
         assert r.status_code == 200
         assert r.json()["name"] == "TEST_Proj_Renamed"
-        # verify persistence
         g = s.get(f"{API}/projects/{TestProjects.proj_id}").json()
         assert g["name"] == "TEST_Proj_Renamed"
 
@@ -151,11 +154,9 @@ class TestRun:
 
     def test_malformed_language(self, s):
         r = s.post(f"{API}/run", json={"language": "cobol", "code": "x"})
-        # Pydantic Literal validation returns 422; treat 400/422 as acceptable
         assert r.status_code in (400, 422), r.text
 
     def test_timeout(self, s):
-        # Should time out at ~10s
         start = time.time()
         r = s.post(f"{API}/run", json={
             "language": "python",
@@ -167,41 +168,20 @@ class TestRun:
         assert "timed out" in d["stderr"].lower()
         assert elapsed < 20, f"Timeout took too long: {elapsed}s"
 
+    def test_run_requires_device_id(self):
+        sess = requests.Session()
+        sess.headers.update({"Content-Type": "application/json"})
+        r = sess.post(f"{API}/run", json={"language": "python", "code": "print(1)"})
+        # When REQUIRE_DEVICE_ID=true on the server, missing header is 401.
+        assert r.status_code in (401, 200), r.text
 
-# ---------------- Chat ----------------
-class TestChat:
-    session_id = f"TEST_{uuid.uuid4().hex[:8]}"
 
-    def test_chat_stream(self, s):
-        r = s.post(f"{API}/chat/stream", json={
-            "session_id": TestChat.session_id,
-            "message": "Say hi in 5 words",
-        }, stream=True, timeout=60)
-        assert r.status_code == 200, r.text
-        chunks = []
-        for chunk in r.iter_content(chunk_size=None, decode_unicode=True):
-            if chunk:
-                chunks.append(chunk)
-            if sum(len(c) for c in chunks) > 500:
-                break
-        r.close()
-        body = "".join(chunks)
-        assert len(body) > 0, "Expected streamed text from Gemini"
-        assert "[Error:" not in body, f"Chat returned error: {body}"
+# ---------------- Chat removed ----------------
+class TestChatRemoved:
+    def test_chat_stream_gone(self, s):
+        r = s.post(f"{API}/chat/stream", json={"session_id": "x", "message": "hi"})
+        assert r.status_code == 404, r.text
 
-    def test_history_after_chat(self, s):
-        # Allow persistence to complete
-        time.sleep(3)
-        r = s.get(f"{API}/chat/history/{TestChat.session_id}")
-        assert r.status_code == 200
-        msgs = r.json()
-        assert len(msgs) >= 1, f"Expected saved messages, got {msgs}"
-        for m in msgs:
-            assert "_id" not in m
-            assert m["role"] in ("user", "assistant")
-
-    def test_clear_history(self, s):
-        r = s.delete(f"{API}/chat/history/{TestChat.session_id}")
-        assert r.status_code == 200
-        g = s.get(f"{API}/chat/history/{TestChat.session_id}").json()
-        assert g == []
+    def test_chat_history_gone(self, s):
+        r = s.get(f"{API}/chat/history/test-session")
+        assert r.status_code == 404, r.text

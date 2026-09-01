@@ -10,13 +10,11 @@ from pathlib import Path
 from typing import List, Literal, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, APIRouter, Header, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, APIRouter, Header, HTTPException
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
 from starlette.middleware.cors import CORSMiddleware
 
-from openrouter_chat import build_messages, stream_openrouter
 from sandbox_run import run_isolated
 
 
@@ -27,11 +25,7 @@ mongo_url = os.environ["MONGO_URL"]
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ["DB_NAME"]]
 
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
-OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "openai/gpt-4o-mini")
-OPENROUTER_SITE_URL = os.environ.get("OPENROUTER_SITE_URL", "https://syntax.ide")
-OPENROUTER_APP_NAME = os.environ.get("OPENROUTER_APP_NAME", "Syntax Mobile IDE")
-# When true, cloud project/file/chat routes require X-Device-Id and are tenant-filtered.
+# When true, cloud project/file routes require X-Device-Id and are tenant-filtered.
 REQUIRE_DEVICE_ID = os.environ.get("REQUIRE_DEVICE_ID", "true").lower() in ("1", "true", "yes")
 
 app = FastAPI(title="Syntax Mobile IDE API")
@@ -39,15 +33,9 @@ api_router = APIRouter(prefix="/api")
 
 Language = Literal["javascript", "typescript", "python", "html", "css"]
 
-SYSTEM_PROMPT = (
-    "You are Syntax, an expert mobile coding assistant. Help the user write, understand, and debug code. "
-    "When you generate code, ALWAYS enclose it in markdown fenced blocks with the language name, e.g. ```python ...``` . "
-    "Keep answers concise and focused. When explaining, use short bullet points."
-)
-
 RUN_TIMEOUT_SEC = 10
 MAX_RUN_CODE_CHARS = 100_000
-CHAT_HISTORY_LIMIT = 40
+RUN_DAILY_LIMIT = int(os.environ.get("RUN_DAILY_LIMIT", "50"))
 
 
 def now_iso() -> str:
@@ -127,22 +115,6 @@ class RunResponse(BaseModel):
     duration_ms: int
 
 
-class ChatRequest(BaseModel):
-    session_id: str
-    message: str
-    context_code: Optional[str] = None
-    context_language: Optional[str] = None
-
-
-class ChatMessage(BaseModel):
-    id: str
-    session_id: str
-    role: str
-    content: str
-    created_at: str
-    owner_id: Optional[str] = None
-
-
 # -----------------------------
 # Health
 # -----------------------------
@@ -152,10 +124,32 @@ class ChatMessage(BaseModel):
 async def root():
     return {
         "message": "Syntax Mobile IDE API",
-        "chat_provider": "openrouter",
-        "chat_model": OPENROUTER_MODEL,
-        "chat_configured": bool(OPENROUTER_API_KEY),
+        "ai": "client-side (Puter on web, OpenRouter BYOK on mobile)",
+        "run_daily_limit": RUN_DAILY_LIMIT,
     }
+
+
+def _utc_day() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+async def check_and_increment_run_quota(device_id: str) -> None:
+    """Per-device daily cap on sandboxed /run to limit server compute costs."""
+    if not device_id or RUN_DAILY_LIMIT <= 0:
+        return
+    day = _utc_day()
+    doc = await db.run_usage.find_one({"device_id": device_id, "day": day})
+    count = int(doc["count"]) if doc else 0
+    if count >= RUN_DAILY_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Daily run limit reached ({RUN_DAILY_LIMIT}/day). Try again tomorrow.",
+        )
+    await db.run_usage.update_one(
+        {"device_id": device_id, "day": day},
+        {"$inc": {"count": 1}, "$setOnInsert": {"created_at": now_iso()}},
+        upsert=True,
+    )
 
 
 # -----------------------------
@@ -295,7 +289,8 @@ async def delete_file(file_id: str, x_device_id: Optional[str] = Header(default=
 
 
 @api_router.post("/run", response_model=RunResponse)
-async def run_code(payload: RunRequest):
+async def run_code(payload: RunRequest, x_device_id: Optional[str] = Header(default=None)):
+    device_id = require_device(x_device_id)
     lang = payload.language
     code = payload.code
     if len(code) > MAX_RUN_CODE_CHARS:
@@ -314,102 +309,14 @@ async def run_code(payload: RunRequest):
     if lang not in ("python", "javascript", "typescript"):
         raise HTTPException(status_code=400, detail=f"Unsupported language: {lang}")
 
+    await check_and_increment_run_quota(device_id)
+
     stdout, stderr, exit_code, duration_ms = await run_isolated(
         language=lang,
         code=code,
         timeout_sec=RUN_TIMEOUT_SEC,
     )
     return RunResponse(stdout=stdout, stderr=stderr, exit_code=exit_code, duration_ms=duration_ms)
-
-
-# -----------------------------
-# AI Chat (OpenRouter)
-# -----------------------------
-
-
-@api_router.post("/chat/stream")
-async def chat_stream(payload: ChatRequest, x_device_id: Optional[str] = Header(default=None)):
-    device_id = require_device(x_device_id)
-    if not OPENROUTER_API_KEY:
-        raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY not configured")
-
-    user_text = payload.message
-    if payload.context_code:
-        user_text = (
-            f"[Current file language: {payload.context_language or 'unknown'}]\n"
-            f"[Current file content]\n```\n{payload.context_code[:4000]}\n```\n\n"
-            f"User question: {payload.message}"
-        )
-
-    hist_filt: dict = {"session_id": payload.session_id}
-    if device_id and REQUIRE_DEVICE_ID:
-        hist_filt["owner_id"] = device_id
-    prior = await db.chat_messages.find(hist_filt, {"_id": 0}).sort("created_at", 1).to_list(CHAT_HISTORY_LIMIT)
-    history = [{"role": d["role"], "content": d["content"]} for d in prior if d.get("role") in ("user", "assistant")]
-    messages = build_messages(SYSTEM_PROMPT, history, user_text)
-
-    async def event_gen():
-        full_parts: List[str] = []
-        try:
-            async for delta in stream_openrouter(
-                api_key=OPENROUTER_API_KEY,
-                model=OPENROUTER_MODEL,
-                messages=messages,
-                site_url=OPENROUTER_SITE_URL,
-                app_name=OPENROUTER_APP_NAME,
-            ):
-                full_parts.append(delta)
-                yield delta
-
-            await db.chat_messages.insert_one(
-                {
-                    "id": str(uuid.uuid4()),
-                    "session_id": payload.session_id,
-                    "role": "user",
-                    "content": payload.message,
-                    "owner_id": device_id or None,
-                    "created_at": now_iso(),
-                }
-            )
-            await db.chat_messages.insert_one(
-                {
-                    "id": str(uuid.uuid4()),
-                    "session_id": payload.session_id,
-                    "role": "assistant",
-                    "content": "".join(full_parts),
-                    "owner_id": device_id or None,
-                    "created_at": now_iso(),
-                }
-            )
-        except Exception as e:
-            logging.exception("chat_stream error")
-            yield f"\n[Error: {str(e)}]"
-
-    return StreamingResponse(
-        event_gen(),
-        media_type="text/plain",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@api_router.get("/chat/history/{session_id}", response_model=List[ChatMessage])
-async def chat_history(session_id: str, x_device_id: Optional[str] = Header(default=None)):
-    device_id = require_device(x_device_id)
-    filt: dict = {"session_id": session_id}
-    if device_id and REQUIRE_DEVICE_ID:
-        filt["owner_id"] = device_id
-    docs = await db.chat_messages.find(filt, {"_id": 0}).sort("created_at", 1).to_list(1000)
-    return [ChatMessage(**d) for d in docs]
-
-
-@api_router.delete("/chat/history/{session_id}")
-async def clear_chat_history(session_id: str, x_device_id: Optional[str] = Header(default=None)):
-    device_id = require_device(x_device_id)
-    filt: dict = {"session_id": session_id}
-    if device_id and REQUIRE_DEVICE_ID:
-        filt["owner_id"] = device_id
-    await db.chat_messages.delete_many(filt)
-    return {"ok": True}
 
 
 # -----------------------------
