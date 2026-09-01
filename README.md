@@ -1,13 +1,13 @@
 # Syntax Mobile IDE
 
-A React Native / Expo mobile IDE with a FastAPI backend: multi-file editor, sandboxed code runner, OpenRouter AI assistant, and a snippets marketplace.
+React Native / Expo mobile IDE with a FastAPI backend: multi-file editor, sandboxed code runner, OpenRouter AI assistant, JWT accounts, and a snippets marketplace.
 
 ## Prerequisites
 
 - Node.js 20+ and Yarn 1.x
 - Python 3.11+
-- Docker (optional, for local MongoDB and stronger `/api/run` isolation)
-- For `/api/run`: `python3`, `node`, and preferably a global `tsx` (`npm i -g tsx`)
+- Docker (optional, for local MongoDB + dedicated runner isolation)
+- For `/api/run` without Docker: `python3`, `node`, and preferably a global `tsx` (`npm i -g tsx`)
 
 ## Quick start
 
@@ -18,12 +18,14 @@ cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env
 ```
 
-Edit `backend/.env` and set `OPENROUTER_API_KEY` (and optionally `OPENROUTER_MODEL`). Edit `frontend/.env` if the API is not on `http://localhost:8000`.
+Edit `backend/.env` and set `JWT_SECRET` and `OPENROUTER_API_KEY` (plus optional `OPENROUTER_MODEL`). Edit `frontend/.env` if the API is not on `http://localhost:8000`.
 
-### 2. MongoDB
+### 2. MongoDB (+ optional full stack)
 
 ```bash
-docker compose up -d
+docker compose up -d mongo
+# Or mongo + api + runner:
+# docker compose up -d
 ```
 
 Or point `MONGO_URL` at any reachable MongoDB instance.
@@ -38,7 +40,15 @@ pip install -r requirements.txt
 uvicorn server:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Health check: `GET http://localhost:8000/api/` → includes `chat_provider: "openrouter"`.
+Optional dedicated runner (Docker-first sandbox):
+
+```bash
+# another shell, from backend/
+REQUIRE_DOCKER=false uvicorn runner_app:app --host 0.0.0.0 --port 8001
+# then set RUNNER_URL=http://127.0.0.1:8001 in backend/.env
+```
+
+Health: `GET http://localhost:8000/api/` → `chat_provider: "openrouter"`, `auth_required: true`.
 
 ### 4. Frontend
 
@@ -48,7 +58,7 @@ yarn install
 yarn start
 ```
 
-Then open in Expo Go, an emulator, or press `w` for web. The app calls `${EXPO_PUBLIC_BACKEND_URL}/api/...` and sends `X-Device-Id` for cloud tenant isolation.
+Open in Expo Go, an emulator, or press `w` for web. Cloud sync, AI chat, and snippet publish require a Syntax account (`/auth`). The app sends `Authorization: Bearer <jwt>` after login.
 
 ## Architecture
 
@@ -56,20 +66,23 @@ Then open in Expo Go, an emulator, or press `w` for web. The app calls `${EXPO_P
 |-------|--------|
 | App | Expo / React Native / expo-router |
 | API | FastAPI + Motor (MongoDB) |
+| Auth | Email/password accounts, bcrypt hashes, JWT sessions |
 | AI | OpenRouter (`OPENROUTER_MODEL`, default `openai/gpt-4o-mini`) |
-| Runner | Isolated temp dir + resource limits; Docker `--network=none` when available |
+| Runner | Dedicated `runner_app` (Docker `--network=none`) or local process sandbox |
 
-Projects and files can sync **local** (AsyncStorage) or **cloud** (MongoDB, scoped by `X-Device-Id`). Chat, snippets, and `/run` always use the API.
-
-## Known production gaps
-
-- `/api/run` isolation is best-effort (temp dir + rlimits / optional Docker). Prefer a dedicated sandbox host for public deploys.
-- Device-id tenancy is not cryptographic auth — sufficient for single-user installs, not multi-user accounts.
-- Snippet authorship remains device-id based.
+Projects/files sync **local** (AsyncStorage) or **cloud** (MongoDB, scoped by authenticated `owner_id`). Chat and `/run` always use the API and require login when `REQUIRE_AUTH=true`.
 
 ## Tests
 
 ```bash
 cd backend
-pytest tests/ -v
+# Mongo must be reachable (docker compose up -d mongo)
+pytest tests/test_local_api.py -v
 ```
+
+GitHub Actions (`.github/workflows/ci.yml`) runs the same suite against a Mongo service container.
+
+## Known production gaps
+
+- Process sandbox is a development fallback — prefer `RUNNER_URL` + `REQUIRE_DOCKER=true` for public deploys.
+- OpenRouter key is required for AI chat; without it `/api/chat/stream` returns an error.

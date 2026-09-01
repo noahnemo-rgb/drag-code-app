@@ -1,4 +1,12 @@
 import { getDeviceId } from "./device-id";
+import {
+  AuthResponse,
+  AuthUser,
+  clearSession,
+  getAccessToken,
+  getAuthUser,
+  setSession,
+} from "./auth";
 
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL ?? "";
 
@@ -28,15 +36,19 @@ export interface RunResult {
   stderr: string;
   exit_code: number;
   duration_ms: number;
+  sandbox?: string;
 }
 
 async function authHeaders(extra?: HeadersInit): Promise<Record<string, string>> {
   const deviceId = await getDeviceId();
-  return {
+  const token = await getAccessToken();
+  const headers: Record<string, string> = {
     "Content-Type": "application/json",
     "X-Device-Id": deviceId,
     ...(extra as Record<string, string> | undefined),
   };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
 }
 
 async function j<T>(path: string, init?: RequestInit): Promise<T> {
@@ -45,11 +57,35 @@ async function j<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers,
   });
+  if (res.status === 401) {
+    // Stale token — clear so UI can prompt login.
+    await clearSession();
+  }
   if (!res.ok) throw new Error(`API ${path} ${res.status}: ${await res.text()}`);
   return (await res.json()) as T;
 }
 
 export const api = {
+  register: async (data: { email: string; password: string; display_name?: string }) => {
+    const res = await j<AuthResponse>("/auth/register", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    await setSession(res);
+    return res;
+  },
+  login: async (data: { email: string; password: string }) => {
+    const res = await j<AuthResponse>("/auth/login", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    await setSession(res);
+    return res;
+  },
+  me: () => j<AuthUser>("/auth/me"),
+  logout: () => clearSession(),
+  getAuthUser,
+
   listProjects: () => j<Project[]>("/projects"),
   createProject: (name: string) =>
     j<Project>("/projects", { method: "POST", body: JSON.stringify({ name }) }),
@@ -86,20 +122,22 @@ export const api = {
     j<Snippet>("/snippets", { method: "POST", body: JSON.stringify(data) }),
   updateSnippet: (id: string, data: SnippetUpdate) =>
     j<Snippet>(`/snippets/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
-  starSnippet: (id: string, deviceId: string) =>
+  starSnippet: (id: string, deviceId?: string) =>
     j<Snippet>(`/snippets/${id}/star`, {
       method: "POST",
-      body: JSON.stringify({ device_id: deviceId }),
+      body: JSON.stringify(deviceId ? { device_id: deviceId } : {}),
     }),
-  isStarred: (id: string, deviceId: string) =>
-    j<{ starred: boolean }>(`/snippets/${id}/starred?device_id=${encodeURIComponent(deviceId)}`),
-  deleteSnippet: (id: string, deviceId: string) =>
-    j<{ ok: boolean }>(`/snippets/${id}?device_id=${encodeURIComponent(deviceId)}`, { method: "DELETE" }),
+  isStarred: (id: string, deviceId?: string) => {
+    const qs = deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : "";
+    return j<{ starred: boolean }>(`/snippets/${id}/starred${qs}`);
+  },
+  deleteSnippet: (id: string) => j<{ ok: boolean }>(`/snippets/${id}`, { method: "DELETE" }),
 };
 
 export interface Snippet {
   id: string;
   author: string;
+  author_id?: string;
   author_device?: string;
   title: string;
   description: string;
@@ -111,7 +149,7 @@ export interface Snippet {
 }
 
 export interface SnippetCreate {
-  author: string;
+  author?: string;
   author_device?: string;
   title: string;
   description?: string;
@@ -121,7 +159,6 @@ export interface SnippetCreate {
 }
 
 export interface SnippetUpdate {
-  device_id: string;
   title?: string;
   description?: string;
   language?: Language;
