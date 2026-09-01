@@ -18,6 +18,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { api, streamChat } from "@/src/lib/api";
+import { loadEditorContext, type EditorContext } from "@/src/lib/editor-context";
 import { highlightLine } from "@/src/lib/highlight";
 import type { Language } from "@/src/lib/api";
 import { COLORS, FONT, RADIUS, SPACING, TEXT } from "@/src/theme";
@@ -37,6 +38,7 @@ export default function AiScreen() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState<string>("");
   const [sending, setSending] = useState<boolean>(false);
+  const [editorCtx, setEditorCtx] = useState<EditorContext | undefined>(undefined);
   const listRef = useRef<FlatList<Msg>>(null);
 
   useEffect(() => {
@@ -47,6 +49,7 @@ export default function AiScreen() {
         await AsyncStorage.setItem(SESSION_KEY, sid);
       }
       setSessionId(sid);
+      setEditorCtx(await loadEditorContext());
       try {
         const history = await api.getChatHistory(sid);
         setMessages(
@@ -79,12 +82,20 @@ export default function AiScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 30);
     try {
-      await streamChat(sid, t, undefined, (chunk) => {
-        setMessages((m) =>
-          m.map((msg) => (msg.id === aiMsg.id ? { ...msg, content: msg.content + chunk } : msg)),
-        );
-        listRef.current?.scrollToEnd({ animated: false });
-      });
+      // Refresh context at send-time so the latest buffer is attached.
+      const ctx = (await loadEditorContext()) ?? editorCtx;
+      if (ctx) setEditorCtx(ctx);
+      await streamChat(
+        sid,
+        t,
+        ctx ? { code: ctx.code, language: ctx.language } : undefined,
+        (chunk) => {
+          setMessages((m) =>
+            m.map((msg) => (msg.id === aiMsg.id ? { ...msg, content: msg.content + chunk } : msg)),
+          );
+          listRef.current?.scrollToEnd({ animated: false });
+        },
+      );
       setMessages((m) => m.map((msg) => (msg.id === aiMsg.id ? { ...msg, pending: false } : msg)));
     } catch (e: unknown) {
       setMessages((m) =>
@@ -141,6 +152,11 @@ export default function AiScreen() {
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>AI Assistant</Text>
           <Text style={styles.subtitle}>Gemini 3 Pro</Text>
+          {editorCtx ? (
+            <Text style={styles.contextHint} numberOfLines={1} testID="ai-context-hint">
+              Using {editorCtx.name || "current file"} ({editorCtx.language})
+            </Text>
+          ) : null}
         </View>
         <Pressable onPress={clear} style={styles.iconBtn} testID="clear-chat-btn" hitSlop={8}>
           <Feather name="trash-2" size={18} color={COLORS.onSurfaceSecondary} />
@@ -342,6 +358,12 @@ const styles = StyleSheet.create({
   iconBtn: { padding: SPACING.sm, borderRadius: RADIUS.md },
   title: { color: COLORS.onSurface, fontSize: TEXT.lg, fontWeight: "700" },
   subtitle: { color: COLORS.brand, fontSize: TEXT.sm, letterSpacing: 1, textTransform: "uppercase" },
+  contextHint: {
+    color: COLORS.onSurfaceSecondary,
+    fontSize: TEXT.sm - 1,
+    fontFamily: FONT.mono,
+    marginTop: 2,
+  },
 
   empty: { flex: 1, alignItems: "center", justifyContent: "center", padding: SPACING.xl, gap: SPACING.md },
   emptyIcon: {

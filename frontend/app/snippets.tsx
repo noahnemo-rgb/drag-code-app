@@ -68,33 +68,58 @@ export default function SnippetsScreen() {
         await AsyncStorage.setItem(DEVICE_KEY, d);
       }
       setDeviceId(d);
-      await refresh(langFilter, searchQuery);
+      await refresh(langFilter, searchQuery, d);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const refresh = useCallback(async (lang: Language | null, q: string) => {
-    setLoading(true);
-    try {
-      const list = await api.listSnippets({
-        language: lang ?? undefined,
-        q: q.trim() || undefined,
-      });
-      setSnippets(list);
-    } finally {
-      setLoading(false);
+  const hydrateStars = useCallback(async (list: Snippet[], did: string) => {
+    if (!did || list.length === 0) {
+      setStarred({});
+      return;
     }
+    const entries = await Promise.all(
+      list.map(async (s) => {
+        try {
+          const r = await api.isStarred(s.id, did);
+          return [s.id, r.starred] as const;
+        } catch {
+          return [s.id, false] as const;
+        }
+      }),
+    );
+    setStarred(Object.fromEntries(entries));
   }, []);
 
+  const refresh = useCallback(
+    async (lang: Language | null, q: string, did: string) => {
+      setLoading(true);
+      try {
+        const list = await api.listSnippets({
+          language: lang ?? undefined,
+          q: q.trim() || undefined,
+        });
+        setSnippets(list);
+        await hydrateStars(list, did);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [hydrateStars],
+  );
+
   useEffect(() => {
-    const t = setTimeout(() => refresh(langFilter, searchQuery), 300);
+    const t = setTimeout(() => {
+      if (!deviceId) return;
+      void refresh(langFilter, searchQuery, deviceId);
+    }, 300);
     return () => clearTimeout(t);
-  }, [langFilter, searchQuery, refresh]);
+  }, [langFilter, searchQuery, refresh, deviceId]);
 
   const onRefresh = async () => {
     setRefreshing(true);
     try {
-      await refresh(langFilter, searchQuery);
+      await refresh(langFilter, searchQuery, deviceId);
     } finally {
       setRefreshing(false);
     }
@@ -105,6 +130,7 @@ export default function SnippetsScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const updated = await api.starSnippet(s.id, deviceId);
     setSnippets((prev) => prev.map((x) => (x.id === s.id ? updated : x)));
+    // Server toggles; derive next starred state from previous hydrated map.
     setStarred((prev) => ({ ...prev, [s.id]: !prev[s.id] }));
     if (selected?.id === s.id) setSelected(updated);
   };

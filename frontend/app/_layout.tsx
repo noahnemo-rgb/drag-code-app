@@ -8,7 +8,11 @@ import { useFonts } from "expo-font";
 
 import { useIconFonts } from "@/src/hooks/use-icon-fonts";
 
-LogBox.ignoreAllLogs(true);
+LogBox.ignoreLogs([
+  // Known RN-Web deprecations that clutter the console without affecting behavior.
+  "props.pointerEvents is deprecated",
+  "shadow* style props are deprecated",
+]);
 
 SplashScreen.preventAutoHideAsync();
 

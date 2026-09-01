@@ -25,6 +25,7 @@ import { WebView } from "react-native-webview";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { FileItem, Language, Project, Snippet } from "@/src/lib/api";
+import { saveEditorContext } from "@/src/lib/editor-context";
 import { highlightLine, PALETTE } from "@/src/lib/highlight";
 import { store } from "@/src/lib/store";
 import { settings, SyncMode } from "@/src/lib/storage";
@@ -303,6 +304,19 @@ export default function EditorScreen() {
     return () => clearTimeout(t);
   }, [content, savedContent, activeFile, syncMode]);
 
+  // Keep AI assistant context in sync with the active buffer.
+  useEffect(() => {
+    if (!activeFile) {
+      void saveEditorContext(null);
+      return;
+    }
+    void saveEditorContext({
+      code: content,
+      language: activeFile.language,
+      name: activeFile.name,
+    });
+  }, [activeFile, content]);
+
   const openDrawer = () => {
     setDrawerOpen(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -470,6 +484,11 @@ export default function EditorScreen() {
     const snippet = content.slice(sel.start, sel.end);
     const prompt = `Explain what the following ${activeFile.language} code does. Be concise and use bullet points.\n\n\`\`\`${activeFile.language}\n${snippet}\n\`\`\``;
     await AsyncStorage.setItem("syntax.pending_prompt", prompt);
+    await saveEditorContext({
+      code: content,
+      language: activeFile.language,
+      name: activeFile.name,
+    });
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.push("/ai");
   };
@@ -504,6 +523,11 @@ export default function EditorScreen() {
       "2) The exact fix — as a single fenced code block containing the full corrected file. Do NOT include prose inside the code block.",
     ].join("\n");
     await AsyncStorage.setItem("syntax.pending_prompt", prompt);
+    await saveEditorContext({
+      code: content,
+      language: activeFile.language,
+      name: activeFile.name,
+    });
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     // Dismiss the console sheet so it doesn't linger over the AI screen on web.
     runSheetRef.current?.dismiss();
@@ -649,7 +673,16 @@ export default function EditorScreen() {
       else if (showNewProject) setShowNewProject(false);
       else if (showBtInfo) setShowBtInfo(false);
     },
-    onAi: () => router.push("/ai"),
+    onAi: () => {
+      if (activeFile) {
+        void saveEditorContext({
+          code: content,
+          language: activeFile.language,
+          name: activeFile.name,
+        });
+      }
+      router.push("/ai");
+    },
     onShortcuts: () => setShowShortcuts(true),
     onQuickFile: () => {
       setQuickFileQuery("");
@@ -716,7 +749,16 @@ export default function EditorScreen() {
         label: "Open AI assistant",
         hint: "Chat with Gemini",
         shortcut: "⌘ K",
-        run: () => router.push("/ai"),
+        run: () => {
+          if (activeFile) {
+            void saveEditorContext({
+              code: content,
+              language: activeFile.language,
+              name: activeFile.name,
+            });
+          }
+          router.push("/ai");
+        },
       },
       {
         id: "push",
@@ -1018,7 +1060,21 @@ export default function EditorScreen() {
         <Pressable onPress={() => setFindOpen((v) => !v)} style={styles.iconBtn} testID="toggle-find-btn" hitSlop={8}>
           <Feather name="search" size={20} color={findOpen ? COLORS.brand : COLORS.onSurface} />
         </Pressable>
-        <Pressable onPress={() => router.push("/ai")} style={styles.iconBtn} testID="open-ai-btn" hitSlop={8}>
+        <Pressable
+          onPress={() => {
+            if (activeFile) {
+              void saveEditorContext({
+                code: content,
+                language: activeFile.language,
+                name: activeFile.name,
+              });
+            }
+            router.push("/ai");
+          }}
+          style={styles.iconBtn}
+          testID="open-ai-btn"
+          hitSlop={8}
+        >
           <Feather name="cpu" size={20} color={COLORS.onSurface} />
         </Pressable>
         <Pressable

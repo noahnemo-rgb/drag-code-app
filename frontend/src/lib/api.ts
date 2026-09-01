@@ -115,34 +115,95 @@ export interface SnippetUpdate {
   tags?: string[];
 }
 
+type ChatStreamBody = {
+  session_id: string;
+  message: string;
+  context_code?: string;
+  context_language?: string;
+};
+
+/**
+ * Progressive text streaming via XHR.
+ * React Native's fetch often exposes a null `response.body`, so ReadableStream
+ * readers break on device. XHR `onprogress` works on both RN and web.
+ */
+function streamChatXhr(url: string, body: ChatStreamBody, onChunk: (text: string) => void): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.setRequestHeader("Content-Type", "application/json");
+    let last = 0;
+    const emit = () => {
+      const text = xhr.responseText ?? "";
+      if (text.length > last) {
+        const chunk = text.slice(last);
+        last = text.length;
+        onChunk(chunk);
+      }
+    };
+    xhr.onprogress = emit;
+    xhr.onload = () => {
+      emit();
+      const full = xhr.responseText ?? "";
+      if (xhr.status >= 200 && xhr.status < 300) resolve(full);
+      else reject(new Error(`Chat stream failed: ${xhr.status}`));
+    };
+    xhr.onerror = () => reject(new Error("Chat stream network error"));
+    xhr.onabort = () => reject(new Error("Chat stream aborted"));
+    xhr.send(JSON.stringify(body));
+  });
+}
+
+async function streamChatFetch(url: string, body: ChatStreamBody, onChunk: (text: string) => void): Promise<string> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`Chat stream failed: ${res.status}`);
+  if (res.body && typeof (res.body as ReadableStream<Uint8Array>).getReader === "function") {
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let full = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+      full += chunk;
+      onChunk(chunk);
+    }
+    return full;
+  }
+  // Fetch succeeded but streaming body is unavailable — deliver all at once.
+  const text = await res.text();
+  if (text) onChunk(text);
+  return text;
+}
+
 export const streamChat = async (
   sessionId: string,
   message: string,
   context: { code?: string; language?: string } | undefined,
   onChunk: (text: string) => void,
 ): Promise<string> => {
-  const res = await fetch(`${BASE}/api/chat/stream`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      session_id: sessionId,
-      message,
-      context_code: context?.code,
-      context_language: context?.language,
-    }),
-  });
-  if (!res.ok || !res.body) {
-    throw new Error(`Chat stream failed: ${res.status}`);
+  const url = `${BASE}/api/chat/stream`;
+  const body: ChatStreamBody = {
+    session_id: sessionId,
+    message,
+    context_code: context?.code,
+    context_language: context?.language,
+  };
+
+  // Prefer XHR on native (reliable progressive chunks). On web, try fetch streams
+  // first and fall back to XHR if the body reader is missing or throws.
+  const isNative = typeof navigator !== "undefined" && (navigator as { product?: string }).product === "ReactNative";
+  if (isNative || typeof XMLHttpRequest !== "undefined") {
+    if (isNative) return streamChatXhr(url, body, onChunk);
+    try {
+      return await streamChatFetch(url, body, onChunk);
+    } catch {
+      return streamChatXhr(url, body, onChunk);
+    }
   }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let full = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    const chunk = decoder.decode(value, { stream: true });
-    full += chunk;
-    onChunk(chunk);
-  }
-  return full;
+  return streamChatFetch(url, body, onChunk);
 };
