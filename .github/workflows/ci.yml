@@ -29,6 +29,7 @@ jobs:
       JWT_SECRET: ci-syntax-secret
       REQUIRE_AUTH: "true"
       REQUIRE_DOCKER: "false"
+      SANDBOX_USE_DOCKER: "false"
       OPENROUTER_API_KEY: ""
       RUNNER_URL: ""
     steps:

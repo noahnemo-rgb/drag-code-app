@@ -13,6 +13,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -26,6 +27,14 @@ DOCKER_MEMORY = os.environ.get("DOCKER_MEMORY", "128m")
 DOCKER_CPUS = os.environ.get("DOCKER_CPUS", "0.5")
 
 
+def _use_docker_sandbox() -> bool:
+    """Prefer Docker when available unless explicitly disabled (e.g. CI)."""
+    pref = os.environ.get("SANDBOX_USE_DOCKER", "auto").lower()
+    if pref in ("0", "false", "no"):
+        return False
+    return docker_available()
+
+
 def docker_available() -> bool:
     if not shutil.which("docker"):
         return False
@@ -34,6 +43,11 @@ def docker_available() -> bool:
         return r.returncode == 0
     except Exception:
         return False
+
+
+def _python_bin() -> str:
+    """Interpreter for process sandbox — same binary as the API when possible."""
+    return shutil.which("python3") or shutil.which("python") or sys.executable
 
 
 def _resource_preexec() -> None:
@@ -74,7 +88,7 @@ async def run_isolated(
     Returns (stdout, stderr, exit_code, duration_ms, sandbox_mode).
     """
     start = datetime.now()
-    use_docker = docker_available()
+    use_docker = _use_docker_sandbox()
     if require_docker and not use_docker:
         return ("", "Docker sandbox required but unavailable.", 503, 0, "unavailable")
 
@@ -100,7 +114,7 @@ async def run_isolated(
                 ]
                 out = await _exec(cmd, work, timeout_sec, start, use_preexec=False)
                 return (*out, "docker")
-            cmd = ["python3", "-I", str(script)]
+            cmd = [_python_bin(), "-I", str(script)]
             out = await _exec(cmd, work, timeout_sec, start, use_preexec=True)
             return (*out, "process")
 

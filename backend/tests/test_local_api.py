@@ -24,6 +24,7 @@ os.environ.setdefault("REQUIRE_AUTH", "true")
 os.environ.setdefault("REQUIRE_DOCKER", "false")
 os.environ.setdefault("OPENROUTER_API_KEY", "")
 os.environ.setdefault("RUNNER_URL", "")
+os.environ.setdefault("SANDBOX_USE_DOCKER", "false")
 
 
 def _free_port() -> int:
@@ -182,7 +183,7 @@ def test_run_python_process_sandbox(s):
     r = s.post(f"{s.base}/run", json={"language": "python", "code": "print(2+2)"}, headers=headers)
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["exit_code"] == 0
+    assert body["exit_code"] == 0, f"stderr={body.get('stderr')!r} stdout={body.get('stdout')!r} sandbox={body.get('sandbox')!r}"
     assert "4" in body["stdout"]
     assert body.get("sandbox") in ("process", "docker")
 
