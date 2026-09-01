@@ -68,6 +68,7 @@ These are intentional follow-ups, not covered by the quick start:
 - `/api/run` is **not sandboxed** — do not expose a public runner without isolation.
 - Cloud projects/files/chat have **no user auth** yet.
 - Snippet authorship is device-id based (client-supplied), not real accounts.
+- `emergentintegrations` may not be on public PyPI; use the Emergent-provided environment or wheel.
 
 ## Tests
 
