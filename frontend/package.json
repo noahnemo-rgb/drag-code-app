@@ -9,7 +9,15 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "eas:login": "npx eas-cli login",
+    "eas:init": "npx eas-cli init",
+    "eas:configure": "npx eas-cli update:configure",
+    "eas:build:dev": "npx eas-cli build --profile development --platform all",
+    "eas:build:preview": "npx eas-cli build --profile preview --platform all",
+    "eas:build:prod": "npx eas-cli build --profile production --platform all",
+    "eas:update:preview": "npx eas-cli update --channel preview",
+    "eas:update:prod": "npx eas-cli update --channel production"
   },
   "dependencies": {
     "@expo/metro-runtime": "6.1.2",
@@ -37,6 +45,7 @@
     "expo-status-bar": "3.0.9",
     "expo-symbols": "1.0.8",
     "expo-system-ui": "6.0.9",
+    "expo-updates": "~29.0.20",
     "expo-web-browser": "15.0.11",
     "react": "19.1.0",
     "react-dom": "19.1.0",

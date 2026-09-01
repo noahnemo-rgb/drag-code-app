@@ -75,6 +75,18 @@ Chat history is stored **locally** (AsyncStorage). Cloud sync remains device-sco
 - Device-id tenancy is not cryptographic auth — sufficient for single-user installs, not multi-user accounts.
 - Snippet authorship remains device-id based.
 
+## Expo / EAS (shared builds & OTA updates)
+
+Local `yarn start` / Expo Go is unchanged for day-to-day coding.
+
+To ship installable builds and over-the-air JS updates to testers:
+
+1. Follow **[docs/EAS.md](docs/EAS.md)** (one-time `eas login` → `eas init` → `eas update:configure`).
+2. Build a preview APK/IPA: `cd frontend && yarn eas:build:preview`
+3. Push JS-only changes: `yarn eas:update:preview` (or merge to `main` once `EXPO_TOKEN` is set for CI).
+
+EAS Update does **not** apply inside Expo Go — only to apps built with EAS Build.
+
 ## Tests
 
 ```bash

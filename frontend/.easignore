@@ -1,0 +1,11 @@
+# Keep EAS uploads small — backend and docs are not needed in the mobile bundle.
+../backend/
+../docs/
+../memory/
+../test_reports/
+../.git/
+../**/*.md
+node_modules/
+.expo/
+dist/
+web-build/
